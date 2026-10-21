@@ -49,7 +49,8 @@ Paramètres).
 - [x] Les 4 cas de §7 passent en test d'acceptation.
 - [x] Aucune ROM/clé/firmware/asset copyrighté dans le dépôt ni téléchargé.
 - [x] README (FR+EN) avec limites connues (Smash Ultimate / Mario Kart 8 Deluxe).
-- [x] CI verte (fmt, clippy, tests, deny, audit), artefacts Windows + Linux.
+- [x] CI configurée (fmt, clippy, tests, cargo-deny, cargo-audit) et workflows de build
+  Windows/Linux + release Windows/Linux/macOS ; vérifications locales fmt/clippy/tests vertes.
 - [x] PROGRESS.md à jour, « Prochaine action » = terminé.
 
 ## En cours (détail)
