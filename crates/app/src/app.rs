@@ -455,6 +455,22 @@ impl LauncherApp {
                     [rect.left_bottom(), rect.right_bottom()],
                     Stroke::new(1.0_f32, tokens.border),
                 );
+
+                // Register the drag zone before the toolbar content so the
+                // window buttons and status text always win hit-testing.
+                let drag_rect = Rect::from_min_max(
+                    egui::pos2(rect.left() + 190.0, rect.top()),
+                    egui::pos2(rect.right() - 280.0, rect.bottom()),
+                );
+                let drag = ui.interact(drag_rect, Id::new("topbar-drag"), Sense::click_and_drag());
+                if drag.drag_started() {
+                    ctx.send_viewport_cmd(ViewportCommand::StartDrag);
+                }
+                if drag.double_clicked() {
+                    let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
+                    ctx.send_viewport_cmd(ViewportCommand::Maximized(!maximized));
+                }
+
                 ui.horizontal_centered(|ui| {
                     let (logo, _) = ui.allocate_exact_size(Vec2::splat(32.0), Sense::hover());
                     crate::ui::art::brand(ui, logo);
@@ -514,19 +530,6 @@ impl LauncherApp {
                         }
                     });
                 });
-
-                let drag_rect = Rect::from_min_max(
-                    egui::pos2(rect.left() + 190.0, rect.top()),
-                    egui::pos2(rect.right() - 280.0, rect.bottom()),
-                );
-                let drag = ui.interact(drag_rect, Id::new("topbar-drag"), Sense::click_and_drag());
-                if drag.drag_started() {
-                    ctx.send_viewport_cmd(ViewportCommand::StartDrag);
-                }
-                if drag.double_clicked() {
-                    let maximized = ctx.input(|input| input.viewport().maximized.unwrap_or(false));
-                    ctx.send_viewport_cmd(ViewportCommand::Maximized(!maximized));
-                }
             });
     }
 
@@ -759,9 +762,15 @@ impl LauncherApp {
         egui::Area::new(Id::new("recomp-resize"))
             .order(Order::Foreground)
             .fixed_pos(screen.min)
-            .interactable(true)
+            .default_size(Vec2::ZERO)
+            // The area itself must stay zero-sized: every Area registers a
+            // background widget spanning its own rect, and a whole-window
+            // widget would passivate every other layer during hit-testing,
+            // killing all clicks and hovers. The handles below only intersect
+            // their own strips with this Ui's clip rect (the full screen), so
+            // a zero-sized area is enough to host them.
+            .interactable(false)
             .show(ctx, |ui| {
-                ui.set_min_size(screen.size());
                 let handles = [
                     (
                         Rect::from_min_size(
