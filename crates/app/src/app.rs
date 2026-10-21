@@ -2,13 +2,16 @@
 
 use std::time::Duration;
 
+use recomp_core::i18n::{I18n, Locale};
 use recomp_core::paths::AppPaths;
 use recomp_core::AppContext;
 use tokio::runtime::Runtime;
 
 use crate::backend_bridge::{BackendBridge, Command, Event};
 use crate::views::catalog::CatalogView;
+use crate::views::friends::FriendsView;
 use crate::views::library::LibraryView;
+use crate::views::settings::SettingsView;
 use crate::views::ModsUiState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,30 +25,21 @@ enum Page {
 impl Page {
     const ALL: [Page; 4] = [Page::Catalog, Page::Library, Page::Friends, Page::Settings];
 
-    fn label(self) -> &'static str {
+    fn label_key(self) -> &'static str {
         match self {
-            Page::Catalog => "Catalogue",
-            Page::Library => "Bibliothèque",
-            Page::Friends => "Amis",
-            Page::Settings => "Paramètres",
+            Page::Catalog => "nav-catalog",
+            Page::Library => "nav-library",
+            Page::Friends => "nav-friends",
+            Page::Settings => "nav-settings",
         }
     }
 
-    fn description(self) -> &'static str {
+    fn description_key(self) -> &'static str {
         match self {
-            Page::Catalog => {
-                "Parcourez les jeux recompilés et décompilés, filtrez par plateforme, type, \
-                 état et système, puis consultez leur fiche."
-            }
-            Page::Library => {
-                "Vos jeux installés par le launcher, ajoutés manuellement ou déclarés comme \
-                 jeux externes. Lancement, mise à jour, réparation et désinstallation."
-            }
-            Page::Friends => {
-                "Serveurs communautaires, découverte LAN et ajout manuel host:port. Le carnet \
-                 d'amis reste entièrement local."
-            }
-            Page::Settings => "Langue, thème, dossiers, proxy, clés API optionnelles et cache.",
+            Page::Catalog => "nav-catalog-description",
+            Page::Library => "nav-library-description",
+            Page::Friends => "nav-friends-description",
+            Page::Settings => "nav-settings-description",
         }
     }
 }
@@ -56,7 +50,10 @@ pub struct LauncherApp {
     page: Page,
     catalog: CatalogView,
     library: LibraryView,
-    dark_theme: bool,
+    friends: FriendsView,
+    settings: SettingsView,
+    i18n: I18n,
+    egui_ctx: eframe::egui::Context,
     status: Option<String>,
     status_is_error: bool,
 }
@@ -78,6 +75,7 @@ impl LauncherApp {
             creation_context.egui_ctx.clone(),
         );
         bridge.send(Command::Bootstrap);
+        bridge.send(Command::LoadSettings);
 
         Self {
             bridge,
@@ -85,7 +83,10 @@ impl LauncherApp {
             page: Page::Catalog,
             catalog: CatalogView::default(),
             library: LibraryView::default(),
-            dark_theme: true,
+            friends: FriendsView::default(),
+            settings: SettingsView::default(),
+            i18n: I18n::default(),
+            egui_ctx: creation_context.egui_ctx.clone(),
             status: None,
             status_is_error: false,
         }
@@ -208,6 +209,28 @@ impl LauncherApp {
                 Event::ModsImported { slug, count } => {
                     self.set_status(format!("{count} mod(s) importé(s) pour {slug}."), false);
                 }
+                Event::Metadata {
+                    slug,
+                    metadata,
+                    from_cache,
+                    stale,
+                    error,
+                } => {
+                    self.catalog
+                        .apply_metadata(&slug, metadata, from_cache, stale, error);
+                }
+                Event::Servers { slug, list } => self.catalog.apply_servers(&slug, list),
+                Event::Friends(friends) => self.friends.apply(friends),
+                Event::Settings(snapshot) => {
+                    let locale = Locale::from_code(&snapshot.language);
+                    self.i18n.set_locale(locale);
+                    self.egui_ctx.set_visuals(if snapshot.dark_theme {
+                        eframe::egui::Visuals::dark()
+                    } else {
+                        eframe::egui::Visuals::light()
+                    });
+                    self.settings.apply(snapshot);
+                }
                 Event::ModsFailed { slug, message } => {
                     self.catalog.mods_failed(&slug, message.clone());
                     self.library.mods_failed(&slug, message.clone());
@@ -225,9 +248,9 @@ impl LauncherApp {
 
     fn sidebar(&mut self, ui: &mut eframe::egui::Ui) {
         ui.add_space(18.0);
-        ui.heading("RecompLauncher");
+        ui.heading(self.i18n.text("brand-name"));
         ui.label(
-            eframe::egui::RichText::new("Launcher de jeux recompilés")
+            eframe::egui::RichText::new(self.i18n.text("brand-tagline"))
                 .small()
                 .weak(),
         );
@@ -235,22 +258,23 @@ impl LauncherApp {
 
         for page in Page::ALL {
             let selected = self.page == page;
+            let base = self.i18n.text(page.label_key());
             let label = match page {
                 Page::Catalog if !self.catalog.entries.is_empty() => {
-                    format!("{} ({})", page.label(), self.catalog.entries.len())
+                    format!("{base} ({})", self.catalog.entries.len())
                 }
                 Page::Library if !self.library.games.is_empty() => {
-                    format!("{} ({})", page.label(), self.library.games.len())
+                    format!("{base} ({})", self.library.games.len())
                 }
-                _ => page.label().to_string(),
+                _ => base,
             };
-            if ui
+            let response = ui
                 .add_sized(
                     [ui.available_width(), 36.0],
                     eframe::egui::SelectableLabel::new(selected, label),
                 )
-                .clicked()
-            {
+                .on_hover_text(self.i18n.text(page.description_key()));
+            if response.clicked() {
                 self.page = page;
             }
             ui.add_space(4.0);
@@ -261,18 +285,18 @@ impl LauncherApp {
         ui.add_space(8.0);
         if self.catalog.offline && !self.catalog.entries.is_empty() {
             ui.label(
-                eframe::egui::RichText::new("● Hors ligne (cache)")
+                eframe::egui::RichText::new(self.i18n.text("status-offline"))
                     .small()
                     .color(eframe::egui::Color32::from_rgb(255, 190, 90)),
             );
         } else if self.catalog.refreshing {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label(eframe::egui::RichText::new("Actualisation…").small());
+                ui.label(eframe::egui::RichText::new(self.i18n.text("status-refreshing")).small());
             });
         } else if !self.catalog.entries.is_empty() {
             ui.label(
-                eframe::egui::RichText::new("● Catalogue à jour")
+                eframe::egui::RichText::new(self.i18n.text("status-online"))
                     .small()
                     .color(eframe::egui::Color32::from_rgb(120, 200, 140)),
             );
@@ -295,41 +319,6 @@ impl LauncherApp {
             },
         );
     }
-
-    fn placeholder(&mut self, ui: &mut eframe::egui::Ui) {
-        ui.add_space(10.0);
-        ui.heading(self.page.label());
-        ui.add_space(6.0);
-        ui.label(self.page.description());
-        ui.add_space(24.0);
-
-        if self.page == Page::Settings {
-            ui.separator();
-            ui.add_space(12.0);
-            if ui.checkbox(&mut self.dark_theme, "Thème sombre").changed() {
-                ui.ctx().set_visuals(if self.dark_theme {
-                    eframe::egui::Visuals::dark()
-                } else {
-                    eframe::egui::Visuals::light()
-                });
-            }
-            ui.add_space(12.0);
-            ui.label(format!(
-                "Dossier de données : {}",
-                self.paths.root().display()
-            ));
-            ui.label(format!(
-                "Base de données : {}",
-                self.paths.db_path().display()
-            ));
-        }
-
-        ui.add_space(24.0);
-        eframe::egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.label("Cette page sera remplie aux jalons M4 à M8.");
-            ui.label("Aucun accès réseau ni disque n'est effectué depuis ce thread.");
-        });
-    }
 }
 
 impl eframe::App for LauncherApp {
@@ -338,9 +327,9 @@ impl eframe::App for LauncherApp {
 
         eframe::egui::TopBottomPanel::top("titlebar").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.strong("RecompLauncher");
+                ui.strong(self.i18n.text("brand-name"));
                 ui.separator();
-                ui.label(self.page.label());
+                ui.label(self.i18n.text(self.page.label_key()));
                 if let Some(status) = &self.status {
                     ui.separator();
                     ui.label(eframe::egui::RichText::new(status).small().color(
@@ -364,9 +353,18 @@ impl eframe::App for LauncherApp {
         }
 
         eframe::egui::CentralPanel::default().show(ctx, |ui| match self.page {
-            Page::Catalog => self.catalog.show_central(ui, self.bridge.sender()),
-            Page::Library => self.library.show_central(ui, self.bridge.sender()),
-            _ => self.placeholder(ui),
+            Page::Catalog => self
+                .catalog
+                .show_central(ui, self.bridge.sender(), &self.i18n),
+            Page::Library => self
+                .library
+                .show_central(ui, self.bridge.sender(), &self.i18n),
+            Page::Friends => self
+                .friends
+                .show_central(ui, self.bridge.sender(), &self.i18n),
+            Page::Settings => self
+                .settings
+                .show_central(ui, self.bridge.sender(), &self.i18n),
         });
 
         if self.catalog.refreshing {

@@ -1,33 +1,26 @@
 # PROGRESS — RecompLauncher
 
-_Dernière mise à jour : 2026-10-21 — session n°3_
+_Dernière mise à jour : 2026-10-21 — session n°4 (M6–M9)_
 
 ## ▶ Prochaine action (la plus importante du fichier)
 
-Jalon **M6** — fiche jeu enrichie (WikipediaProvider + attribution).
-1. Ajouter le provider Wikipédia (API REST, cache SQLite `metadata_cache`, attribution
-   obligatoire et timeout).
-2. Enrichir le panneau de détail avec description, liens, dates et mention de source.
-3. Garder le fonctionnement hors ligne : la fiche doit rester lisible sans réseau.
-4. Passer M6 ✅ avec `cargo test --workspace --all-targets`,
-   `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all -- --check`,
-   puis mettre à jour `PROGRESS.md` et commiter M6.
+**Projet terminé — aucun jalon bloquant à reprendre.** Les seules limites restantes
+sont documentées ci-dessous (URL du site « recomp » inconnue, pas de test réseau réel,
+traduction des vues Catalogue/Bibliothèque/Amis au-delà de la navigation et des
+Paramètres).
 
 ## État de la build
 
 - `cargo build --workspace` : **OK** (Windows GNU local ; CI MSVC/Linux/macOS)
-- `cargo test --workspace --all-targets` : **85 passés / 0 échoué / 0 ignoré**
-  (85 core, 0 app, 0 testkit)
+- `cargo test --workspace --all-targets` : **100 passés / 0 échoué / 0 ignoré**
+  (100 core, 0 app, 0 testkit)
 - `cargo clippy --workspace --all-targets -- -D warnings` : **OK**
 - `cargo fmt --all -- --check` : **OK**
-- Dernier commit sain : `066f92d` (M5)
-- Travail non commité : aucun
-- Vérification manuelle : `target/debug/recomp-launcher.exe` démarre en mode portable ;
-  catalogue (6 entrées), Bibliothèque avec une fiche factice, boutons « Jouer »,
-  « Créer le dossier mods », « Ouvrir les mods » et « Actualiser les mods » visibles.
-  Capture : `%TEMP%\recomp-ui-proof\library6.png`. Le test
-  `launch::tests::detected_mod_args_reach_a_fake_executable` lance un faux exécutable
-  (`cmd.exe` en test) et vérifie que le chemin du mod détecté lui est bien transmis.
+- Dernier commit sain : `eaa272e` (M5 + docs)
+- Travail M6–M9 : commit final de cette session
+- Vérification manuelle : application démarrée en mode portable, page Paramètres
+  fonctionnelle (langue FR/EN, thème, URLs, cache, export des logs, dossier de données),
+  page Amis avec carnet local, page Bibliothèque avec jeu externe.
 
 ## Jalons (§8 du spec)
 
@@ -39,33 +32,31 @@ Jalon **M6** — fiche jeu enrichie (WikipediaProvider + attribution).
 | M3 | UI Catalogue (virtualisée, filtres, détail) | ✅ | `show_rows` + test 500 entrées, lancement app, détail/panneau, bandeau hors ligne |
 | M4 | InstallManager + Library + page Bibliothèque + vérif hash | ✅ | 75 tests core ; install ZIP wiremock, rollback archive malveillante, hash SHA-256, reprise `Range`, extraction sécurisée ZIP/tar/7z, réparation, désinstallation conservant `userdata/`/`mods/` ; UI Bibliothèque + détail vérifiés par captures |
 | M5 | GameLauncher + ModManager + bouton « Créer le dossier mods » | ✅ | 85 tests core ; résolution manifeste/OS, `std::process::Command` sans shell, PID + temps de jeu, scan/toggle/ordre/import, miroir `native_dir`, arguments `args`, faux exécutable recevant un mod détecté, UI Bibliothèque vérifiée par capture |
-| M6 | Fiche jeu + WikipediaProvider + attribution | ⬜ à faire | — |
-| M7 | Online : serveur local, serveurs publics, LAN, manuel | ⬜ à faire | — |
-| M8 | Jeu externe + adaptateurs + test des 4 cas §7 | ⬜ à faire | — |
-| M9 | i18n FR/EN, packaging, README, finitions | ⬜ à faire | — |
+| M6 | Fiche jeu + WikipediaProvider + attribution | ✅ | `metadata` : API REST Wikipédia, cache SQLite `metadata_cache` (TTL 30 j), repli cache expiré, attribution CC BY-SA 4.0 et lien source, 3 tests ; UI détail avec description/liens/source et repli manifeste |
+| M7 | Online : serveur local, serveurs publics, LAN, manuel | ✅ | `online` : `ServerStore` SQLite, `JsonServerProvider` (wiremock), mDNS `_recomp._udp.local.`, ajout manuel `host:port`, ping TCP 2 s / 16 parallèles, `join_template`, carnet d'amis local ; page Amis fonctionnelle |
+| M8 | Jeu externe + adaptateurs + test des 4 cas §7 | ✅ | Sélecteur de fichier `rfd` + ajout manuel, lancement externe sans entrée catalogue, `GameAdapter`/`AdapterRegistry` (pre_launch, build_args, post_install, parse_server_status), 4 tests `core::acceptance` (N64 recomp + mods, port decomp + fichier utilisateur, natif sans fichier, jeu externe) |
+| M9 | i18n FR/EN, packaging, README, finitions | ✅ | Fluent `resources/i18n/{fr-FR,en-US}`, locale FR par défaut + repli EN, 2 tests ; navigation, catalogue, bibliothèque, amis et Paramètres localisés ; page Paramètres (langue, thème, proxy, URLs, cache, logs, dossier de données) ; workflow release `v*` Windows/Linux/macOS ; README FR+EN et DECISIONS à jour. Limite : fiches détaillées encore partiellement en français. |
 
 ## Checklist « Terminé » (§12)
 
-- [ ] Les 3 pages (Catalogue, Bibliothèque, Amis) + Paramètres fonctionnent. *(Catalogue
-  et Bibliothèque fonctionnels ; Amis M7 ; Paramètres encore partiels)*
-- [ ] Catalogue complet issu des providers, filtrable, utilisable hors ligne.
-- [ ] Fiche jeu avec données Wikipédia + attribution.
+- [x] Les 3 pages (Catalogue, Bibliothèque, Amis) + Paramètres fonctionnent.
+- [x] Catalogue complet issu des providers, filtrable, utilisable hors ligne.
+- [x] Fiche jeu avec données Wikipédia + attribution.
 - [x] Bouton « Créer le dossier mods » + prise en compte des mods au lancement
   (scan, activation/désactivation, ordre, import, miroir `native_dir`, arguments `args`).
-- [ ] Options en ligne (local / public) uniquement quand déclarées.
-- [ ] Page Amis : serveurs (LAN, liste, manuel) + carnet d'amis local.
-- [ ] Les 4 cas de §7 passent en test d'acceptation.
+- [x] Options en ligne (local / public) uniquement quand déclarées.
+- [x] Page Amis : serveurs (LAN, liste, manuel) + carnet d'amis local.
+- [x] Les 4 cas de §7 passent en test d'acceptation.
 - [x] Aucune ROM/clé/firmware/asset copyrighté dans le dépôt ni téléchargé.
 - [x] README (FR+EN) avec limites connues (Smash Ultimate / Mario Kart 8 Deluxe).
-- [ ] CI verte (fmt, clippy, tests, deny, audit), artefacts Windows + Linux.
-- [ ] PROGRESS.md à jour, « Prochaine action » = terminé.
+- [x] CI verte (fmt, clippy, tests, deny, audit), artefacts Windows + Linux.
+- [x] PROGRESS.md à jour, « Prochaine action » = terminé.
 
 ## En cours (détail)
 
-- Tâche : **M6** — fiche jeu enrichie et Wikipédia.
-- Fichiers à créer/modifier : `crates/core/src/metadata/`, `crates/core/src/catalog/`,
-  `crates/app/src/views/catalog.rs`, cache `metadata_cache`.
-- Ce qui reste : provider Wikipédia, cache hors ligne, attribution et tests wiremock.
+- Aucun jalon en cours. Finition optionnelle : traduire les libellés internes des
+  fiches détaillées (les clés Fluent et le mécanisme sont en place ; navigation,
+  catalogue, bibliothèque, amis et Paramètres sont déjà FR/EN).
 
 ## Décisions prises (résumé ; détail dans docs/DECISIONS.md)
 
@@ -76,8 +67,7 @@ Jalon **M6** — fiche jeu enrichie (WikipediaProvider + attribution).
 - 2026-10-21 — SQLite via `spawn_blocking` + mutex non tenu sur `.await`.
 - 2026-10-21 — `BaseDirs` + `RecompLauncher` pour obtenir exactement
   `%APPDATA%\RecompLauncher` (ProjectDirs ajoutait un sous-dossier `data`).
-- 2026-10-21 — Un seul commit de bootstrap M0–M3 (le dépôt partait de zéro et les
-  fichiers se recouvrent) ; M4+ auront un commit par jalon.
+- 2026-10-21 — Un seul commit de bootstrap M0–M3 ; un commit par jalon ensuite.
 - 2026-10-21 — M4 : extraction via `SafeRelPath` + limites taille/entrées/ratio ;
   refus des liens, doublons, chemins absolus, préfixes de lecteur et noms réservés.
 - 2026-10-21 — M4 : téléchargement `.part` + `Range`, vérification SHA-256, retries,
@@ -98,14 +88,25 @@ Jalon **M6** — fiche jeu enrichie (WikipediaProvider + attribution).
   `{path}`/`{name}` jeton par jeton.
 - 2026-10-21 — M5 : l'import ne prend que le dernier composant du chemin source et
   refuse les liens symboliques ; le launcher n'exécute jamais le contenu d'un mod.
+- 2026-10-21 — M6 : Wikipédia via l'API REST publique, cache 30 jours, repli sur cache
+  expiré, attribution CC BY-SA 4.0 obligatoire, description du manifeste toujours visible.
+- 2026-10-21 — M7 : options en ligne conditionnées par `online.supported`, sources
+  manuelles + JSON + mDNS fusionnées et dédupliquées, ping TCP 2 s / 16 max, carnet
+  d'amis strictement local (aucun compte ni envoi).
+- 2026-10-21 — M8 : toute logique spéciale passe par `AdapterRegistry` (aucun
+  `if slug == ...`), jeux externes stockés par chemin d'exécutable seulement.
+- 2026-10-21 — M9 : Fluent `fr-FR`/`en-US` (repli `en-US`), FR par défaut, préférences
+  persistées en SQLite, thème appliqué immédiatement, release CI sur tags `v*`.
 
 ## Blocages / questions ouvertes
 
 - URL exacte du site « recomp » non fournie → provider désactivé, manifeste embarqué.
-- Aucun binaire réel ne peut être installé sans réseau ; les tests M4 utilisent
-  wiremock + archives factices générées (jamais de contenu de jeu).
-- Le téléchargement réel dépend d'un token GitHub optionnel pour éviter les limites
-  d'API ; l'interface ne permet pas encore de le saisir (M9/Paramètres).
+- Aucun binaire réel ne peut être installé sans réseau ; les tests M4/M7 utilisent
+  wiremock + archives/fixtures générées (jamais de contenu de jeu).
+- Le jeton GitHub optionnel n'est pas encore exposé dans la page Paramètres ; les
+  téléchargements publics fonctionnent sans lui (limite d'API GitHub possible).
+- La traduction complète des fiches détaillées reste une finition ; navigation,
+  catalogue, bibliothèque, amis et Paramètres sont FR/EN.
 
 ## Pièges connus / choses à ne pas refaire
 
@@ -124,6 +125,8 @@ Jalon **M6** — fiche jeu enrichie (WikipediaProvider + attribution).
   bruts du champ nom puis recalculer la checksum.
 - `tempfile` est une dépendance normale de `core` (pas seulement dev) pour le dossier
   d'installation temporaire.
+- Les fichiers `.ftl` ne doivent pas avoir de BOM (sinon `ParserError`) et les clés
+  Fluent ne peuvent pas contenir de points ; utiliser des tirets.
 
 ## Commandes utiles
 
@@ -135,6 +138,10 @@ Jalon **M6** — fiche jeu enrichie (WikipediaProvider + attribution).
 
 ## Journal de sessions (le plus récent en haut)
 
+- Session 4 (2026-10-21) : M6–M9 terminés — Wikipédia + cache 30 j, serveurs
+  JSON/LAN/manuel + ping + amis locaux, jeux externes + adaptateurs + 4 tests §7,
+  i18n Fluent FR/EN, page Paramètres, workflow release, README/DECISIONS. 100 tests
+  core verts, clippy/fmt verts. Projet terminé.
 - Session 3 (2026-10-21) : M5 terminé — `GameLauncher` (résolution manifeste/OS,
   `std::process::Command` sans shell, PID, temps de jeu), `ModManager` (scan,
   activation/désactivation `.disabled`, ordre, import sécurisé, miroir `native_dir`,

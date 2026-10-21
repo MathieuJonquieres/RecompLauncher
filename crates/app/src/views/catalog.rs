@@ -10,11 +10,13 @@ use recomp_core::catalog::filter::{CatalogFilter, CatalogSort};
 use recomp_core::catalog::model::{GameEntry, GameKind, GameStatus, Os};
 use recomp_core::catalog::service::CatalogSnapshot;
 use recomp_core::db::now_unix;
+use recomp_core::i18n::I18n;
 use recomp_core::library::{InstallSource, LibraryGame};
+use recomp_core::online::ServerList;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::backend_bridge::Command;
-use crate::views::{InstallProgress, ModsUiState};
+use crate::views::{InstallProgress, MetadataUiState, ModsUiState};
 
 const CARD_HEIGHT: f32 = 164.0;
 const CARD_MIN_WIDTH: f32 = 260.0;
@@ -32,6 +34,13 @@ pub struct CatalogView {
     pub installs: HashMap<String, InstallProgress>,
     pub mods: HashMap<String, ModsUiState>,
     mods_requested: HashSet<String>,
+    pub metadata: HashMap<String, MetadataUiState>,
+    metadata_requested: HashSet<String>,
+    pub servers: HashMap<String, ServerList>,
+    servers_requested: HashSet<String>,
+    server_name: String,
+    server_address: String,
+    server_port: String,
     pending_uninstall: Option<String>,
 }
 
@@ -72,6 +81,32 @@ impl CatalogView {
         self.mods.insert(slug.to_string(), state);
     }
 
+    pub fn apply_metadata(
+        &mut self,
+        slug: &str,
+        metadata: Option<recomp_core::metadata::GameMetadata>,
+        from_cache: bool,
+        stale: bool,
+        error: Option<String>,
+    ) {
+        self.metadata_requested.insert(slug.to_string());
+        self.metadata.insert(
+            slug.to_string(),
+            MetadataUiState {
+                metadata,
+                from_cache,
+                stale,
+                error,
+                loading: false,
+            },
+        );
+    }
+
+    pub fn apply_servers(&mut self, slug: &str, list: ServerList) {
+        self.servers_requested.insert(slug.to_string());
+        self.servers.insert(slug.to_string(), list);
+    }
+
     pub fn mods_failed(&mut self, slug: &str, message: impl Into<String>) {
         let state = self
             .mods
@@ -85,26 +120,32 @@ impl CatalogView {
         self.library.iter().find(|game| game.slug == slug)
     }
 
-    pub fn show_central(&mut self, ui: &mut egui::Ui, commands: &UnboundedSender<Command>) {
-        self.toolbar(ui, commands);
+    pub fn show_central(
+        &mut self,
+        ui: &mut egui::Ui,
+        commands: &UnboundedSender<Command>,
+        i18n: &I18n,
+    ) {
+        self.toolbar(ui, commands, i18n);
         ui.separator();
         if self.offline {
             egui::Frame::group(ui.style())
                 .fill(Color32::from_rgb(70, 54, 20))
                 .show(ui, |ui| {
                     ui.label(
-                        RichText::new(
-                            "Hors ligne — affichage du dernier catalogue en cache. \
-                             Les installations et actualisations nécessitent Internet.",
-                        )
-                        .color(Color32::from_rgb(255, 214, 120)),
+                        RichText::new(i18n.text("catalog-offline"))
+                            .color(Color32::from_rgb(255, 214, 120)),
                     );
                 });
             ui.add_space(6.0);
         }
         if !self.errors.is_empty() {
             ui.collapsing(
-                format!("{} erreur(s) de fournisseur", self.errors.len()),
+                format!(
+                    "{} {}",
+                    self.errors.len(),
+                    i18n.text("catalog-provider-errors")
+                ),
                 |ui| {
                     for error in &self.errors {
                         ui.label(RichText::new(error).small().color(Color32::LIGHT_RED));
@@ -112,26 +153,31 @@ impl CatalogView {
                 },
             );
         }
-        self.grid(ui, commands);
+        self.grid(ui, commands, i18n);
     }
 
-    fn toolbar(&mut self, ui: &mut egui::Ui, commands: &UnboundedSender<Command>) {
+    fn toolbar(&mut self, ui: &mut egui::Ui, commands: &UnboundedSender<Command>, i18n: &I18n) {
         let platforms = CatalogFilter::platforms(&self.entries);
 
         ui.horizontal_wrapped(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.filter.search)
-                    .hint_text("Rechercher un jeu, une plateforme…")
+                    .hint_text(i18n.text("catalog-search"))
                     .desired_width(240.0),
             );
 
             let mut platform = self.filter.platform.clone();
             egui::ComboBox::from_id_salt("catalog-platform")
-                .selected_text(platform.as_deref().unwrap_or("Toutes plateformes"))
+                .selected_text(
+                    platform
+                        .as_deref()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| i18n.text("catalog-all-platforms")),
+                )
                 .width(170.0)
                 .show_ui(ui, |ui| {
                     if ui
-                        .selectable_label(platform.is_none(), "Toutes plateformes")
+                        .selectable_label(platform.is_none(), i18n.text("catalog-all-platforms"))
                         .clicked()
                     {
                         platform = None;
@@ -152,46 +198,105 @@ impl CatalogView {
 
             let mut kind = self.filter.kind;
             egui::ComboBox::from_id_salt("catalog-kind")
-                .selected_text(kind.map_or("Tous types", GameKind::label))
+                .selected_text(kind.map_or_else(
+                    || i18n.text("catalog-all-types"),
+                    |kind| {
+                        i18n.text(match kind {
+                            GameKind::Recomp => "catalog-recomp",
+                            GameKind::Decomp => "catalog-decomp",
+                            GameKind::NativePort => "catalog-native",
+                            _ => "catalog-native",
+                        })
+                    },
+                ))
                 .width(130.0)
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut kind, None, "Tous types");
-                    ui.selectable_value(&mut kind, Some(GameKind::Recomp), "Recomp");
-                    ui.selectable_value(&mut kind, Some(GameKind::Decomp), "Décomp");
-                    ui.selectable_value(&mut kind, Some(GameKind::NativePort), "Port natif");
+                    ui.selectable_value(&mut kind, None, i18n.text("catalog-all-types"));
+                    ui.selectable_value(
+                        &mut kind,
+                        Some(GameKind::Recomp),
+                        i18n.text("catalog-recomp"),
+                    );
+                    ui.selectable_value(
+                        &mut kind,
+                        Some(GameKind::Decomp),
+                        i18n.text("catalog-decomp"),
+                    );
+                    ui.selectable_value(
+                        &mut kind,
+                        Some(GameKind::NativePort),
+                        i18n.text("catalog-native"),
+                    );
                 });
             self.filter.kind = kind;
 
             let mut status = self.filter.status;
             egui::ComboBox::from_id_salt("catalog-status")
-                .selected_text(status.map_or("Tous états", GameStatus::label))
+                .selected_text(status.map_or_else(
+                    || i18n.text("catalog-all-status"),
+                    |status| {
+                        i18n.text(match status {
+                            GameStatus::Playable => "catalog-playable",
+                            GameStatus::Beta => "catalog-beta",
+                            GameStatus::Wip => "catalog-wip",
+                            _ => "catalog-wip",
+                        })
+                    },
+                ))
                 .width(120.0)
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut status, None, "Tous états");
-                    ui.selectable_value(&mut status, Some(GameStatus::Playable), "Jouable");
-                    ui.selectable_value(&mut status, Some(GameStatus::Beta), "Bêta");
-                    ui.selectable_value(&mut status, Some(GameStatus::Wip), "WIP");
+                    ui.selectable_value(&mut status, None, i18n.text("catalog-all-status"));
+                    ui.selectable_value(
+                        &mut status,
+                        Some(GameStatus::Playable),
+                        i18n.text("catalog-playable"),
+                    );
+                    ui.selectable_value(
+                        &mut status,
+                        Some(GameStatus::Beta),
+                        i18n.text("catalog-beta"),
+                    );
+                    ui.selectable_value(
+                        &mut status,
+                        Some(GameStatus::Wip),
+                        i18n.text("catalog-wip"),
+                    );
                 });
             self.filter.status = status;
 
-            ui.checkbox(&mut self.filter.os_only, "Compatibles avec mon OS");
+            ui.checkbox(&mut self.filter.os_only, i18n.text("catalog-os-only"));
 
             egui::ComboBox::from_id_salt("catalog-sort")
                 .selected_text(match self.filter.sort {
-                    CatalogSort::Title => "Tri : titre",
-                    CatalogSort::Platform => "Tri : plateforme",
-                    CatalogSort::Status => "Tri : état",
+                    CatalogSort::Title => i18n.text("catalog-sort-title"),
+                    CatalogSort::Platform => i18n.text("catalog-sort-platform"),
+                    CatalogSort::Status => i18n.text("catalog-sort-status"),
                 })
                 .width(150.0)
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.filter.sort, CatalogSort::Title, "Titre");
-                    ui.selectable_value(&mut self.filter.sort, CatalogSort::Platform, "Plateforme");
-                    ui.selectable_value(&mut self.filter.sort, CatalogSort::Status, "État");
+                    ui.selectable_value(
+                        &mut self.filter.sort,
+                        CatalogSort::Title,
+                        i18n.text("catalog-title"),
+                    );
+                    ui.selectable_value(
+                        &mut self.filter.sort,
+                        CatalogSort::Platform,
+                        i18n.text("catalog-platform"),
+                    );
+                    ui.selectable_value(
+                        &mut self.filter.sort,
+                        CatalogSort::Status,
+                        i18n.text("catalog-status"),
+                    );
                 });
 
             ui.separator();
             if ui
-                .add_enabled(!self.refreshing, egui::Button::new("Actualiser"))
+                .add_enabled(
+                    !self.refreshing,
+                    egui::Button::new(i18n.text("catalog-refresh")),
+                )
                 .clicked()
             {
                 let _ = commands.send(Command::RefreshCatalog);
@@ -200,23 +305,27 @@ impl CatalogView {
                 ui.spinner();
             }
             ui.label(
-                RichText::new(format!("Dernière MAJ : {}", format_age(self.last_updated)))
-                    .small()
-                    .weak(),
+                RichText::new(format!(
+                    "{} : {}",
+                    i18n.text("catalog-last-updated"),
+                    format_age(self.last_updated)
+                ))
+                .small()
+                .weak(),
             );
         });
     }
 
-    fn grid(&mut self, ui: &mut egui::Ui, commands: &UnboundedSender<Command>) {
+    fn grid(&mut self, ui: &mut egui::Ui, commands: &UnboundedSender<Command>, i18n: &I18n) {
         let filtered = self.filter.apply(&self.entries);
         if filtered.is_empty() {
             ui.add_space(40.0);
             ui.vertical_centered(|ui| {
                 ui.label(
                     RichText::new(if self.entries.is_empty() {
-                        "Aucun jeu chargé. Lancez une actualisation du catalogue."
+                        i18n.text("catalog-empty")
                     } else {
-                        "Aucun jeu ne correspond à ces filtres."
+                        i18n.text("catalog-no-match")
                     })
                     .weak(),
                 );
@@ -272,6 +381,14 @@ impl CatalogView {
         let installed = self.installed(entry.slug.as_str()).cloned();
         let progress = self.installs.get(entry.slug.as_str()).copied();
         let mods_state = self.mods.get(entry.slug.as_str()).cloned();
+        let metadata_state = self.metadata.get(entry.slug.as_str()).cloned();
+        let servers_state = self.servers.get(entry.slug.as_str()).cloned();
+        let should_request_servers = entry.online.supported
+            && !self.servers_requested.contains(entry.slug.as_str())
+            && servers_state.is_none();
+        let should_request_metadata = entry.metadata.wikipedia_title.is_some()
+            && !self.metadata_requested.contains(entry.slug.as_str())
+            && metadata_state.is_none();
         let should_request_mods = entry.mods.supported
             && !self.mods_requested.contains(entry.slug.as_str())
             && mods_state.is_none();
@@ -312,6 +429,82 @@ impl CatalogView {
                     ui.add_space(8.0);
                     if !entry.description.is_empty() {
                         ui.label(&entry.description);
+                    }
+
+                    if let Some(state) = &metadata_state {
+                        if state.loading {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(RichText::new("Chargement de la fiche Wikipédia…").small().weak());
+                            });
+                        }
+                        if let Some(metadata) = &state.metadata {
+                            ui.add_space(8.0);
+                            egui::Frame::group(ui.style()).show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.strong("Fiche Wikipédia");
+                                    if state.from_cache {
+                                        ui.label(
+                                            RichText::new(if state.stale {
+                                                "cache expiré"
+                                            } else {
+                                                "cache"
+                                            })
+                                            .small()
+                                            .weak(),
+                                        );
+                                    }
+                                });
+                                if let Some(summary) = &metadata.summary {
+                                    ui.label(summary);
+                                } else if let Some(description) = &metadata.description {
+                                    ui.label(description);
+                                }
+                                ui.horizontal_wrapped(|ui| {
+                                    if let Some(year) = metadata.year {
+                                        ui.label(RichText::new(format!("Année : {year}")).small());
+                                    }
+                                    if let Some(developer) = &metadata.developer {
+                                        ui.label(
+                                            RichText::new(format!("Développeur : {developer}"))
+                                                .small(),
+                                        );
+                                    }
+                                    if let Some(publisher) = &metadata.publisher {
+                                        ui.label(
+                                            RichText::new(format!("Éditeur : {publisher}")).small(),
+                                        );
+                                    }
+                                });
+                                if let Some(source) = &metadata.source_url {
+                                    if ui.link("Source Wikipédia").clicked() {
+                                        let _ = commands.send(Command::OpenUrl(source.clone()));
+                                    }
+                                }
+                                ui.label(
+                                    RichText::new(&metadata.attribution)
+                                        .small()
+                                        .weak(),
+                                );
+                            });
+                        }
+                        if let Some(error) = &state.error {
+                            ui.label(
+                                RichText::new(error)
+                                    .small()
+                                    .color(Color32::from_rgb(220, 130, 130)),
+                            );
+                            ui.label(
+                                RichText::new("La fiche du manifeste reste disponible hors ligne.")
+                                    .small()
+                                    .weak(),
+                            );
+                        }
+                    } else if should_request_metadata {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(RichText::new("Chargement de la fiche Wikipédia…").small().weak());
+                        });
                     }
 
                     ui.add_space(8.0);
@@ -509,17 +702,30 @@ impl CatalogView {
                             }
                         });
                     } else if compatible {
-                        if ui
-                            .add(
-                                egui::Button::new("Installer")
-                                    .min_size(Vec2::new(150.0, 30.0)),
-                            )
-                            .clicked()
-                        {
-                            let _ = commands.send(Command::Install {
-                                slug: entry.slug.as_str().to_string(),
-                            });
-                        }
+                        ui.horizontal_wrapped(|ui| {
+                            if ui
+                                .add(
+                                    egui::Button::new("Installer")
+                                        .min_size(Vec2::new(150.0, 30.0)),
+                                )
+                                .clicked()
+                            {
+                                let _ = commands.send(Command::Install {
+                                    slug: entry.slug.as_str().to_string(),
+                                });
+                            }
+                            if ui
+                                .button("Ajouter manuellement")
+                                .on_hover_text(
+                                    "Choisir un exécutable déjà présent sur ce disque (aucun fichier copié).",
+                                )
+                                .clicked()
+                            {
+                                let _ = commands.send(Command::PickManualGame {
+                                    slug: entry.slug.as_str().to_string(),
+                                });
+                            }
+                        });
                         ui.label(
                             RichText::new(
                                 "Le binaire officiel sera téléchargé depuis GitHub Releases, \
@@ -692,6 +898,130 @@ impl CatalogView {
                         let modes: Vec<&str> =
                             entry.online.modes.iter().map(|mode| mode.label()).collect();
                         ui.label(modes.join(" · "));
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.button("Actualiser les serveurs").clicked() {
+                                let _ = commands.send(Command::LoadServers {
+                                    slug: entry.slug.as_str().to_string(),
+                                });
+                            }
+                            if ui.button("Ping").clicked() {
+                                let _ = commands.send(Command::PingServers {
+                                    slug: entry.slug.as_str().to_string(),
+                                });
+                            }
+                            if ui.button("Découvrir en LAN").clicked() {
+                                let _ = commands.send(Command::DiscoverLan {
+                                    slug: entry.slug.as_str().to_string(),
+                                });
+                            }
+                        });
+                        if let Some(state) = &servers_state {
+                            for error in &state.errors {
+                                ui.label(
+                                    RichText::new(error)
+                                        .small()
+                                        .color(Color32::from_rgb(220, 130, 130)),
+                                );
+                            }
+                            if state.servers.is_empty() {
+                                ui.label(
+                                    RichText::new(
+                                        "Aucun serveur connu. Ajoutez une adresse host:port ou lancez la découverte LAN.",
+                                    )
+                                    .small()
+                                    .weak(),
+                                );
+                            }
+                            for server in &state.servers {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(RichText::new(&server.name).strong());
+                                    ui.label(
+                                        RichText::new(server.endpoint()).small().monospace().weak(),
+                                    );
+                                    ui.label(RichText::new(server.source.label()).small().weak());
+                                    if let Some(ping) = server.last_ping_ms {
+                                        ui.label(
+                                            RichText::new(format!("{ping} ms"))
+                                                .small()
+                                                .color(Color32::from_rgb(120, 200, 140)),
+                                        );
+                                    } else {
+                                        ui.label(RichText::new("non joint").small().weak());
+                                    }
+                                    if ui.button("Rejoindre").clicked() {
+                                        let _ = commands.send(Command::JoinServer {
+                                            slug: entry.slug.as_str().to_string(),
+                                            address: server.address.clone(),
+                                            port: server.port,
+                                        });
+                                    }
+                                    if server.source
+                                        == recomp_core::online::ServerSource::Manual
+                                    {
+                                        if let Some(id) = server.id {
+                                            if ui.button("Supprimer").clicked() {
+                                                let _ = commands.send(Command::RemoveServer {
+                                                    slug: entry.slug.as_str().to_string(),
+                                                    id,
+                                                });
+                                            }
+                                        }
+                                    }
+                                });
+                            }
+                        } else if should_request_servers {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(RichText::new("Chargement des serveurs…").small().weak());
+                            });
+                        }
+
+                        ui.add_space(4.0);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.server_name)
+                                    .hint_text("Nom")
+                                    .desired_width(100.0),
+                            );
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.server_address)
+                                    .hint_text("host")
+                                    .desired_width(110.0),
+                            );
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.server_port)
+                                    .hint_text("port")
+                                    .desired_width(55.0),
+                            );
+                            if ui.button("Ajouter le serveur").clicked() {
+                                let address = self.server_address.trim().to_string();
+                                let port = self.server_port.trim().parse::<u16>().ok();
+                                let name = self.server_name.trim();
+                                match port {
+                                    Some(port) if !address.is_empty() => {
+                                        let _ = commands.send(Command::AddServer {
+                                            slug: entry.slug.as_str().to_string(),
+                                            name: if name.is_empty() {
+                                                address.clone()
+                                            } else {
+                                                name.to_string()
+                                            },
+                                            address,
+                                            port,
+                                        });
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        });
+                        ui.label(
+                            RichText::new(
+                                "Les serveurs manuels et la découverte LAN ne nécessitent aucun compte. \
+                                 La liste publique est optionnelle et déclarée par le projet.",
+                            )
+                            .small()
+                            .weak(),
+                        );
                     } else {
                         ui.label(RichText::new("Aucune option en ligne déclarée.").weak());
                     }
@@ -711,6 +1041,18 @@ impl CatalogView {
 
         if let Some(slug) = request_uninstall {
             self.pending_uninstall = Some(slug);
+        }
+        if should_request_metadata {
+            let slug = entry.slug.as_str().to_string();
+            self.metadata_requested.insert(slug.clone());
+            self.metadata
+                .insert(slug.clone(), MetadataUiState::loading());
+            let _ = commands.send(Command::LoadMetadata { slug });
+        }
+        if should_request_servers {
+            let slug = entry.slug.as_str().to_string();
+            self.servers_requested.insert(slug.clone());
+            let _ = commands.send(Command::LoadServers { slug });
         }
         if should_request_mods {
             let slug = entry.slug.as_str().to_string();

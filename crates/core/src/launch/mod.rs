@@ -10,6 +10,7 @@ use std::time::Instant;
 
 use thiserror::Error;
 
+use crate::adapters::{AdapterContext, AdapterError, AdapterRegistry};
 use crate::archive::SafeRelPath;
 use crate::catalog::model::{GameEntry, Os};
 use crate::db::DbError;
@@ -24,6 +25,9 @@ pub enum LaunchError {
 
     #[error("mod error: {0}")]
     Mod(#[from] ModError),
+
+    #[error("adapter error: {0}")]
+    Adapter(String),
 
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -79,11 +83,27 @@ pub struct ExitInfo {
 pub struct GameLauncher {
     library: Library,
     mods: ModManager,
+    adapters: AdapterRegistry,
 }
 
 impl GameLauncher {
     pub fn new(library: Library, mods: ModManager) -> Self {
-        Self { library, mods }
+        Self {
+            library,
+            mods,
+            adapters: AdapterRegistry::new(),
+        }
+    }
+
+    /// Registers per-game adapters. Launch code dispatches by slug only through
+    /// this registry.
+    pub fn with_adapters(mut self, adapters: AdapterRegistry) -> Self {
+        self.adapters = adapters;
+        self
+    }
+
+    pub fn adapters(&self) -> &AdapterRegistry {
+        &self.adapters
     }
 
     /// Builds a launch plan without starting anything.
@@ -92,35 +112,24 @@ impl GameLauncher {
         entry: &GameEntry,
         game: &LibraryGame,
     ) -> Result<LaunchPlan, LaunchError> {
+        self.resolve_with_extra_args(entry, game, &[]).await
+    }
+
+    /// Same as [`resolve`](Self::resolve) with extra arguments (for example a
+    /// server endpoint declared by the manifest join template).
+    pub async fn resolve_with_extra_args(
+        &self,
+        entry: &GameEntry,
+        game: &LibraryGame,
+        extra_args: &[String],
+    ) -> Result<LaunchPlan, LaunchError> {
         if entry.slug.as_str() != game.slug {
             return Err(LaunchError::NotInLibrary(game.slug.clone()));
         }
         let os = Os::current();
 
         if game.source == InstallSource::External {
-            let executable = game
-                .external_exe
-                .clone()
-                .ok_or_else(|| LaunchError::MissingExecutable(PathBuf::new()))?;
-            if !executable.is_file() {
-                return Err(LaunchError::MissingExecutable(executable));
-            }
-            let cwd = game
-                .external_cwd
-                .clone()
-                .filter(|path| path.is_dir())
-                .or_else(|| executable.parent().map(Path::to_path_buf))
-                .ok_or_else(|| LaunchError::InvalidPath(executable.display().to_string()))?;
-            let args = match game.external_args.as_deref() {
-                Some(template) if !template.trim().is_empty() => tokenize_args(template)?,
-                _ => Vec::new(),
-            };
-            return Ok(LaunchPlan {
-                executable,
-                args,
-                cwd,
-                mods: ModApplication::default(),
-            });
+            return self.resolve_external_with_args(game, extra_args);
         }
 
         let install_path = game
@@ -162,11 +171,91 @@ impl GameLauncher {
             .map_err(LaunchError::Mod)?;
         let mut args = entry.launch.args.clone();
         args.extend(mods.extra_args.iter().cloned());
+        args.extend(extra_args.iter().cloned());
+        let mut cwd = cwd;
+        if let Some(adapter) = self.adapters.get(entry.slug.as_str()) {
+            let mut context = AdapterContext {
+                entry,
+                game,
+                args,
+                cwd,
+            };
+            adapter
+                .pre_launch(&mut context)
+                .map_err(|error: AdapterError| LaunchError::Adapter(error.to_string()))?;
+            let extra = adapter.build_args(&context);
+            context.args.extend(extra);
+            args = context.args;
+            cwd = context.cwd;
+        }
         Ok(LaunchPlan {
             executable,
             args,
             cwd,
             mods,
+        })
+    }
+
+    /// Resolves a launcher-managed external game without a catalogue entry.
+    pub fn resolve_external(&self, game: &LibraryGame) -> Result<LaunchPlan, LaunchError> {
+        self.resolve_external_with_args(game, &[])
+    }
+
+    fn resolve_external_with_args(
+        &self,
+        game: &LibraryGame,
+        extra_args: &[String],
+    ) -> Result<LaunchPlan, LaunchError> {
+        if game.source != InstallSource::External {
+            return Err(LaunchError::NotInLibrary(game.slug.clone()));
+        }
+        let executable = game
+            .external_exe
+            .clone()
+            .ok_or_else(|| LaunchError::MissingExecutable(PathBuf::new()))?;
+        if !executable.is_file() {
+            return Err(LaunchError::MissingExecutable(executable));
+        }
+        let cwd = game
+            .external_cwd
+            .clone()
+            .filter(|path| path.is_dir())
+            .or_else(|| executable.parent().map(Path::to_path_buf))
+            .ok_or_else(|| LaunchError::InvalidPath(executable.display().to_string()))?;
+        let mut args = match game.external_args.as_deref() {
+            Some(template) if !template.trim().is_empty() => tokenize_args(template)?,
+            _ => Vec::new(),
+        };
+        args.extend(extra_args.iter().cloned());
+        Ok(LaunchPlan {
+            executable,
+            args,
+            cwd,
+            mods: ModApplication::default(),
+        })
+    }
+
+    /// Launches an external game (no catalogue entry required).
+    pub fn launch_external(&self, game: &LibraryGame) -> Result<RunningGame, LaunchError> {
+        self.launch_external_with_args(game, &[])
+    }
+
+    pub fn launch_external_with_args(
+        &self,
+        game: &LibraryGame,
+        extra_args: &[String],
+    ) -> Result<RunningGame, LaunchError> {
+        let plan = self.resolve_external_with_args(game, extra_args)?;
+        let mut command = Command::new(&plan.executable);
+        command.args(&plan.args).current_dir(&plan.cwd);
+        let started = Instant::now();
+        let child = command.spawn()?;
+        Ok(RunningGame {
+            slug: game.slug.clone(),
+            pid: child.id(),
+            executable: plan.executable,
+            started,
+            child,
         })
     }
 
@@ -176,7 +265,19 @@ impl GameLauncher {
         entry: &GameEntry,
         game: &LibraryGame,
     ) -> Result<RunningGame, LaunchError> {
-        let plan = self.resolve(entry, game).await?;
+        self.launch_with_extra_args(entry, game, &[]).await
+    }
+
+    /// Launches with extra arguments appended after manifest/mods arguments.
+    pub async fn launch_with_extra_args(
+        &self,
+        entry: &GameEntry,
+        game: &LibraryGame,
+        extra_args: &[String],
+    ) -> Result<RunningGame, LaunchError> {
+        let plan = self
+            .resolve_with_extra_args(entry, game, extra_args)
+            .await?;
         let mut command = Command::new(&plan.executable);
         command.args(&plan.args).current_dir(&plan.cwd);
         let started = Instant::now();

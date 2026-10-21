@@ -102,7 +102,9 @@
         "modes": {
           "type": "array",
           "items": { "enum": ["local_server", "public_server", "p2p"] }
-        }
+        },
+        "join_template": { "type": ["string", "null"], "maxLength": 512 },
+        "lan_service": { "type": ["string", "null"], "maxLength": 128 }
       }
     },
     "metadata": {

@@ -20,9 +20,27 @@ use recomp_core::library::install::{
     remove_install_preserving_userdata, AssetDownload, InstallManager,
 };
 use recomp_core::library::LibraryGame;
+use recomp_core::metadata::GameMetadata;
 use recomp_core::mods::ModsSnapshot;
-use recomp_core::settings::KEY_GITHUB_TOKEN;
+use recomp_core::online::{join_entry_args, Friend, ServerInfo, ServerList};
+use recomp_core::settings::{
+    KEY_CATALOG_MANIFEST_URL, KEY_GITHUB_TOKEN, KEY_INSTALL_DIR, KEY_LANGUAGE, KEY_PROXY,
+    KEY_SERVERS_URL, KEY_THEME,
+};
 use recomp_core::AppContext;
+
+/// Settings exposed to the UI. Secrets are never returned here.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SettingsSnapshot {
+    pub language: String,
+    pub dark_theme: bool,
+    pub proxy: String,
+    pub manifest_url: String,
+    pub servers_url: String,
+    pub install_dir: String,
+    pub data_dir: String,
+    pub portable: bool,
+}
 
 /// Requests sent by the UI.
 #[derive(Debug, Clone)]
@@ -71,6 +89,57 @@ pub enum Command {
         slug: String,
         paths: Vec<PathBuf>,
     },
+    LoadMetadata {
+        slug: String,
+    },
+    LoadServers {
+        slug: String,
+    },
+    AddServer {
+        slug: String,
+        name: String,
+        address: String,
+        port: u16,
+    },
+    RemoveServer {
+        slug: String,
+        id: i64,
+    },
+    PingServers {
+        slug: String,
+    },
+    DiscoverLan {
+        slug: String,
+    },
+    JoinServer {
+        slug: String,
+        address: String,
+        port: u16,
+    },
+    PickExternalGame,
+    PickManualGame {
+        slug: String,
+    },
+    LoadFriends,
+    AddFriend {
+        display_name: String,
+        notes: Option<String>,
+        handles: Vec<(String, String)>,
+    },
+    RemoveFriend {
+        id: i64,
+    },
+    LoadSettings,
+    SaveSettings {
+        language: String,
+        dark_theme: bool,
+        proxy: String,
+        manifest_url: String,
+        servers_url: String,
+    },
+    ClearCache,
+    ExportLogs,
+    OpenDataDir,
     OpenUrl(String),
     OpenPath(PathBuf),
 }
@@ -134,6 +203,19 @@ pub enum Event {
         slug: String,
         message: String,
     },
+    Metadata {
+        slug: String,
+        metadata: Option<GameMetadata>,
+        from_cache: bool,
+        stale: bool,
+        error: Option<String>,
+    },
+    Servers {
+        slug: String,
+        list: ServerList,
+    },
+    Friends(Vec<Friend>),
+    Settings(SettingsSnapshot),
     Error(String),
     Info(String),
 }
@@ -145,6 +227,28 @@ enum ModsAction {
     Toggle { name: String, enabled: bool },
     Reorder(Vec<String>),
     Import(Vec<PathBuf>),
+}
+
+enum ServerAction {
+    Load,
+    Add {
+        name: String,
+        address: String,
+        port: u16,
+    },
+    Remove(i64),
+    Ping,
+    DiscoverLan,
+}
+
+enum FriendsAction {
+    Load,
+    Add {
+        display_name: String,
+        notes: Option<String>,
+        handles: Vec<(String, String)>,
+    },
+    Remove(i64),
 }
 
 /// Owns the backend runtime and channels.
@@ -363,6 +467,165 @@ async fn backend_loop(
                     egui_ctx.clone(),
                 );
             }
+            Command::LoadMetadata { slug } => {
+                spawn_metadata(Arc::clone(&context), slug, events.clone(), egui_ctx.clone());
+            }
+            Command::LoadServers { slug } => {
+                spawn_server_list(
+                    Arc::clone(&context),
+                    slug,
+                    ServerAction::Load,
+                    events.clone(),
+                    egui_ctx.clone(),
+                );
+            }
+            Command::AddServer {
+                slug,
+                name,
+                address,
+                port,
+            } => {
+                spawn_server_list(
+                    Arc::clone(&context),
+                    slug,
+                    ServerAction::Add {
+                        name,
+                        address,
+                        port,
+                    },
+                    events.clone(),
+                    egui_ctx.clone(),
+                );
+            }
+            Command::RemoveServer { slug, id } => {
+                spawn_server_list(
+                    Arc::clone(&context),
+                    slug,
+                    ServerAction::Remove(id),
+                    events.clone(),
+                    egui_ctx.clone(),
+                );
+            }
+            Command::PingServers { slug } => {
+                spawn_server_list(
+                    Arc::clone(&context),
+                    slug,
+                    ServerAction::Ping,
+                    events.clone(),
+                    egui_ctx.clone(),
+                );
+            }
+            Command::DiscoverLan { slug } => {
+                spawn_server_list(
+                    Arc::clone(&context),
+                    slug,
+                    ServerAction::DiscoverLan,
+                    events.clone(),
+                    egui_ctx.clone(),
+                );
+            }
+            Command::JoinServer {
+                slug,
+                address,
+                port,
+            } => {
+                spawn_join(
+                    Arc::clone(&context),
+                    slug,
+                    address,
+                    port,
+                    events.clone(),
+                    egui_ctx.clone(),
+                );
+            }
+            Command::PickExternalGame => {
+                spawn_pick_game(Arc::clone(&context), None, events.clone(), egui_ctx.clone());
+            }
+            Command::PickManualGame { slug } => {
+                spawn_pick_game(
+                    Arc::clone(&context),
+                    Some(slug),
+                    events.clone(),
+                    egui_ctx.clone(),
+                );
+            }
+            Command::LoadFriends => {
+                spawn_friends(
+                    Arc::clone(&context),
+                    FriendsAction::Load,
+                    events.clone(),
+                    egui_ctx.clone(),
+                );
+            }
+            Command::AddFriend {
+                display_name,
+                notes,
+                handles,
+            } => {
+                spawn_friends(
+                    Arc::clone(&context),
+                    FriendsAction::Add {
+                        display_name,
+                        notes,
+                        handles,
+                    },
+                    events.clone(),
+                    egui_ctx.clone(),
+                );
+            }
+            Command::RemoveFriend { id } => {
+                spawn_friends(
+                    Arc::clone(&context),
+                    FriendsAction::Remove(id),
+                    events.clone(),
+                    egui_ctx.clone(),
+                );
+            }
+            Command::LoadSettings => {
+                spawn_load_settings(Arc::clone(&context), events.clone(), egui_ctx.clone());
+            }
+            Command::SaveSettings {
+                language,
+                dark_theme,
+                proxy,
+                manifest_url,
+                servers_url,
+            } => {
+                spawn_save_settings(
+                    Arc::clone(&context),
+                    SettingsSnapshot {
+                        language,
+                        dark_theme,
+                        proxy,
+                        manifest_url,
+                        servers_url,
+                        ..SettingsSnapshot::default()
+                    },
+                    events.clone(),
+                    egui_ctx.clone(),
+                );
+            }
+            Command::ClearCache => {
+                spawn_clear_cache(Arc::clone(&context), events.clone(), egui_ctx.clone());
+            }
+            Command::ExportLogs => {
+                spawn_export_logs(Arc::clone(&context), events.clone(), egui_ctx.clone());
+            }
+            Command::OpenDataDir => {
+                let root = context.paths().root().to_path_buf();
+                match opener::open(&root) {
+                    Ok(()) => emit(
+                        &events,
+                        &egui_ctx,
+                        Event::Info(format!("Dossier ouvert : {}", root.display())),
+                    ),
+                    Err(error) => emit(
+                        &events,
+                        &egui_ctx,
+                        Event::Error(format!("Ouverture du dossier : {error}")),
+                    ),
+                }
+            }
             Command::OpenUrl(url) => {
                 if !url.starts_with("https://") {
                     emit(
@@ -450,9 +713,366 @@ async fn emit_library(
     }
 }
 
-fn spawn_play(
+fn spawn_load_settings(
+    context: Arc<AppContext>,
+    events: UnboundedSender<Event>,
+    egui_ctx: eframe::egui::Context,
+) {
+    tokio::spawn(async move {
+        match read_settings(&context).await {
+            Ok(snapshot) => emit(&events, &egui_ctx, Event::Settings(snapshot)),
+            Err(error) => emit(
+                &events,
+                &egui_ctx,
+                Event::Error(format!("Lecture des paramètres : {error}")),
+            ),
+        }
+    });
+}
+
+async fn read_settings(context: &AppContext) -> Result<SettingsSnapshot, String> {
+    let settings = context.settings();
+    let language = settings
+        .get_or(KEY_LANGUAGE, "fr-FR")
+        .await
+        .map_err(|error| error.to_string())?;
+    let theme = settings
+        .get_or(KEY_THEME, "dark")
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(SettingsSnapshot {
+        language,
+        dark_theme: theme != "light",
+        proxy: settings
+            .get_or(KEY_PROXY, "")
+            .await
+            .map_err(|error| error.to_string())?,
+        manifest_url: settings
+            .get_or(KEY_CATALOG_MANIFEST_URL, "")
+            .await
+            .map_err(|error| error.to_string())?,
+        servers_url: settings
+            .get_or(KEY_SERVERS_URL, "")
+            .await
+            .map_err(|error| error.to_string())?,
+        install_dir: settings
+            .get_or(
+                KEY_INSTALL_DIR,
+                &context.paths().games_dir().display().to_string(),
+            )
+            .await
+            .map_err(|error| error.to_string())?,
+        data_dir: context.paths().root().display().to_string(),
+        portable: context.paths().is_portable(),
+    })
+}
+
+fn spawn_save_settings(
+    context: Arc<AppContext>,
+    snapshot: SettingsSnapshot,
+    events: UnboundedSender<Event>,
+    egui_ctx: eframe::egui::Context,
+) {
+    tokio::spawn(async move {
+        let result = async {
+            let language = if snapshot.language.to_ascii_lowercase().starts_with("en") {
+                "en-US"
+            } else {
+                "fr-FR"
+            };
+            for (label, value) in [
+                ("manifest", snapshot.manifest_url.trim()),
+                ("servers", snapshot.servers_url.trim()),
+            ] {
+                if !value.is_empty() && !value.starts_with("https://") {
+                    return Err(format!("{label} URL must use HTTPS"));
+                }
+            }
+            let proxy = snapshot.proxy.trim();
+            if !proxy.is_empty() && !proxy.starts_with("http://") && !proxy.starts_with("https://")
+            {
+                return Err("proxy URL must use HTTP or HTTPS".to_string());
+            }
+            for (key, value) in [
+                (KEY_LANGUAGE, language),
+                (
+                    KEY_THEME,
+                    if snapshot.dark_theme { "dark" } else { "light" },
+                ),
+                (KEY_PROXY, snapshot.proxy.trim()),
+                (KEY_CATALOG_MANIFEST_URL, snapshot.manifest_url.trim()),
+                (KEY_SERVERS_URL, snapshot.servers_url.trim()),
+            ] {
+                if value.is_empty() {
+                    context
+                        .settings()
+                        .remove(key)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                } else {
+                    context
+                        .settings()
+                        .set(key, value)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                }
+            }
+            read_settings(&context).await
+        }
+        .await;
+        match result {
+            Ok(snapshot) => {
+                emit(&events, &egui_ctx, Event::Settings(snapshot));
+                emit(
+                    &events,
+                    &egui_ctx,
+                    Event::Info("Paramètres enregistrés.".to_string()),
+                );
+            }
+            Err(error) => emit(
+                &events,
+                &egui_ctx,
+                Event::Error(format!("Enregistrement des paramètres : {error}")),
+            ),
+        }
+    });
+}
+
+fn spawn_clear_cache(
+    context: Arc<AppContext>,
+    events: UnboundedSender<Event>,
+    egui_ctx: eframe::egui::Context,
+) {
+    tokio::spawn(async move {
+        let result = async {
+            context
+                .catalog()
+                .clear_cache()
+                .await
+                .map_err(|error| error.to_string())?;
+            context
+                .metadata()
+                .clear_all()
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok::<(), String>(())
+        }
+        .await;
+        match result {
+            Ok(()) => emit(&events, &egui_ctx, Event::Info("Cache vidé.".to_string())),
+            Err(error) => emit(
+                &events,
+                &egui_ctx,
+                Event::Error(format!("Vidage du cache : {error}")),
+            ),
+        }
+    });
+}
+
+fn spawn_export_logs(
+    context: Arc<AppContext>,
+    events: UnboundedSender<Event>,
+    egui_ctx: eframe::egui::Context,
+) {
+    tokio::spawn(async move {
+        let picked = tokio::task::spawn_blocking(|| {
+            rfd::FileDialog::new()
+                .set_title("Choisir le dossier d'export des logs")
+                .pick_folder()
+        })
+        .await;
+        let Some(destination) = picked.ok().flatten() else {
+            return;
+        };
+        let logs = context.paths().logs_dir();
+        let result = tokio::task::spawn_blocking(move || {
+            let mut copied = 0_usize;
+            for entry in std::fs::read_dir(&logs)? {
+                let entry = entry?;
+                if entry.file_type()?.is_file() {
+                    std::fs::copy(entry.path(), destination.join(entry.file_name()))?;
+                    copied += 1;
+                }
+            }
+            Ok::<usize, std::io::Error>(copied)
+        })
+        .await;
+        match result {
+            Ok(Ok(copied)) => emit(
+                &events,
+                &egui_ctx,
+                Event::Info(format!("{copied} fichier(s) de log exporté(s).")),
+            ),
+            Ok(Err(error)) => emit(
+                &events,
+                &egui_ctx,
+                Event::Error(format!("Export des logs : {error}")),
+            ),
+            Err(error) => emit(
+                &events,
+                &egui_ctx,
+                Event::Error(format!("Export des logs : {error}")),
+            ),
+        }
+    });
+}
+
+fn spawn_metadata(
     context: Arc<AppContext>,
     slug: String,
+    events: UnboundedSender<Event>,
+    egui_ctx: eframe::egui::Context,
+) {
+    tokio::spawn(async move {
+        let entry = match context.catalog().find(&slug).await {
+            Ok(Some(entry)) => entry,
+            Ok(None) => {
+                emit(
+                    &events,
+                    &egui_ctx,
+                    Event::Metadata {
+                        slug,
+                        metadata: None,
+                        from_cache: false,
+                        stale: false,
+                        error: Some("Jeu inconnu dans le catalogue.".to_string()),
+                    },
+                );
+                return;
+            }
+            Err(error) => {
+                emit(
+                    &events,
+                    &egui_ctx,
+                    Event::Metadata {
+                        slug,
+                        metadata: None,
+                        from_cache: false,
+                        stale: false,
+                        error: Some(format!("Lecture du catalogue: {error}")),
+                    },
+                );
+                return;
+            }
+        };
+        let title = entry
+            .metadata
+            .wikipedia_title
+            .clone()
+            .unwrap_or_else(|| entry.title.clone());
+        match context.metadata().load(&slug, &title).await {
+            Ok(outcome) => emit(
+                &events,
+                &egui_ctx,
+                Event::Metadata {
+                    slug,
+                    metadata: Some(outcome.metadata),
+                    from_cache: outcome.from_cache,
+                    stale: outcome.stale,
+                    error: None,
+                },
+            ),
+            Err(error) => {
+                tracing::warn!(%slug, %error, "metadata lookup failed");
+                emit(
+                    &events,
+                    &egui_ctx,
+                    Event::Metadata {
+                        slug,
+                        metadata: None,
+                        from_cache: false,
+                        stale: false,
+                        error: Some(format!("Fiche Wikipédia indisponible: {error}")),
+                    },
+                );
+            }
+        }
+    });
+}
+
+fn spawn_server_list(
+    context: Arc<AppContext>,
+    slug: String,
+    action: ServerAction,
+    events: UnboundedSender<Event>,
+    egui_ctx: eframe::egui::Context,
+) {
+    tokio::spawn(async move {
+        let mut already_emitted = false;
+        let result = match action {
+            ServerAction::Load => Ok(()),
+            ServerAction::Add {
+                name,
+                address,
+                port,
+            } => {
+                let server = ServerInfo {
+                    id: None,
+                    game_slug: slug.clone(),
+                    name,
+                    address,
+                    port,
+                    source: recomp_core::online::ServerSource::Manual,
+                    last_ping_ms: None,
+                    players: None,
+                    max_players: None,
+                    favorite: false,
+                };
+                context
+                    .online()
+                    .add_manual(&server)
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| format!("Ajout du serveur: {error}"))
+            }
+            ServerAction::Remove(id) => context
+                .online()
+                .remove_manual(id)
+                .await
+                .map(|_| ())
+                .map_err(|error| format!("Suppression du serveur: {error}")),
+            ServerAction::Ping => {
+                let list = context.online().ping_all(&slug).await;
+                emit(
+                    &events,
+                    &egui_ctx,
+                    Event::Servers {
+                        slug: slug.clone(),
+                        list,
+                    },
+                );
+                already_emitted = true;
+                Ok(())
+            }
+            ServerAction::DiscoverLan => {
+                let list = context.online().discover_lan(&slug).await;
+                emit(
+                    &events,
+                    &egui_ctx,
+                    Event::Servers {
+                        slug: slug.clone(),
+                        list,
+                    },
+                );
+                already_emitted = true;
+                Ok(())
+            }
+        };
+        if let Err(message) = result {
+            emit(&events, &egui_ctx, Event::Error(message));
+        }
+        if !already_emitted {
+            let list = context.online().list(&slug).await;
+            emit(&events, &egui_ctx, Event::Servers { slug, list });
+        }
+    });
+}
+
+fn spawn_join(
+    context: Arc<AppContext>,
+    slug: String,
+    address: String,
+    port: u16,
     events: UnboundedSender<Event>,
     egui_ctx: eframe::egui::Context,
 ) {
@@ -467,6 +1087,213 @@ fn spawn_play(
                 );
                 return;
             }
+            Err(error) => {
+                emit(
+                    &events,
+                    &egui_ctx,
+                    Event::Error(format!("Lecture du catalogue: {error}")),
+                );
+                return;
+            }
+        };
+        if !entry.online.supported {
+            emit(
+                &events,
+                &egui_ctx,
+                Event::Error(format!("{} ne déclare pas d'option en ligne.", entry.title)),
+            );
+            return;
+        }
+        let args = join_entry_args(&entry, &address, port);
+        if args.is_empty() {
+            emit(
+                &events,
+                &egui_ctx,
+                Event::Error(format!(
+                    "{} n'a pas de modèle de connexion dans son manifeste.",
+                    entry.title
+                )),
+            );
+            return;
+        }
+        spawn_play_with_args(context, slug, args, events, egui_ctx);
+    });
+}
+
+fn spawn_friends(
+    context: Arc<AppContext>,
+    action: FriendsAction,
+    events: UnboundedSender<Event>,
+    egui_ctx: eframe::egui::Context,
+) {
+    tokio::spawn(async move {
+        let result = match action {
+            FriendsAction::Load => Ok(()),
+            FriendsAction::Add {
+                display_name,
+                notes,
+                handles,
+            } => context
+                .friends()
+                .add(&display_name, notes.as_deref(), handles)
+                .await
+                .map(|_| ())
+                .map_err(|error| format!("Ajout de l'ami: {error}")),
+            FriendsAction::Remove(id) => context
+                .friends()
+                .remove(id)
+                .await
+                .map(|_| ())
+                .map_err(|error| format!("Suppression de l'ami: {error}")),
+        };
+        if let Err(message) = result {
+            emit(&events, &egui_ctx, Event::Error(message));
+        }
+        match context.friends().list().await {
+            Ok(friends) => emit(&events, &egui_ctx, Event::Friends(friends)),
+            Err(error) => emit(
+                &events,
+                &egui_ctx,
+                Event::Error(format!("Chargement des amis: {error}")),
+            ),
+        }
+    });
+}
+
+fn spawn_pick_game(
+    context: Arc<AppContext>,
+    manual_slug: Option<String>,
+    events: UnboundedSender<Event>,
+    egui_ctx: eframe::egui::Context,
+) {
+    tokio::spawn(async move {
+        let picked = tokio::task::spawn_blocking(|| {
+            rfd::FileDialog::new()
+                .set_title("Choisir l'exécutable du jeu")
+                .pick_file()
+        })
+        .await;
+        let path = match picked {
+            Ok(Some(path)) => path,
+            Ok(None) => {
+                emit(
+                    &events,
+                    &egui_ctx,
+                    Event::Info("Sélection annulée.".to_string()),
+                );
+                return;
+            }
+            Err(error) => {
+                emit(
+                    &events,
+                    &egui_ctx,
+                    Event::Error(format!("Sélecteur de fichier: {error}")),
+                );
+                return;
+            }
+        };
+        let result = match manual_slug {
+            Some(slug) => {
+                let entry = context.catalog().find(&slug).await;
+                match entry {
+                    Ok(Some(entry)) => context
+                        .library()
+                        .add_manual(&slug, &entry.title, &path, None)
+                        .await
+                        .map(|game| game.title)
+                        .map_err(|error| error.to_string()),
+                    Ok(None) => Err(format!("Jeu inconnu dans le catalogue: {slug}")),
+                    Err(error) => Err(error.to_string()),
+                }
+            }
+            None => {
+                let title = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or("Jeu externe")
+                    .to_string();
+                let existing = context
+                    .library()
+                    .list()
+                    .await
+                    .map(|games| {
+                        games
+                            .into_iter()
+                            .map(|game| game.slug)
+                            .collect::<std::collections::HashSet<_>>()
+                    })
+                    .unwrap_or_default();
+                let base = slugify(&title);
+                let mut slug = base.clone();
+                let mut suffix = 2_u32;
+                while existing.contains(&slug) {
+                    slug = format!("{base}-{suffix}");
+                    suffix += 1;
+                }
+                let cwd = path.parent().map(std::path::Path::to_path_buf);
+                context
+                    .library()
+                    .add_external(&slug, &title, &path, None, cwd.as_deref())
+                    .await
+                    .map(|game| game.title)
+                    .map_err(|error| error.to_string())
+            }
+        };
+        match result {
+            Ok(title) => {
+                emit(
+                    &events,
+                    &egui_ctx,
+                    Event::Info(format!("{title} ajouté à la bibliothèque.")),
+                );
+                emit_library(&context, &events, &egui_ctx).await;
+            }
+            Err(message) => emit(
+                &events,
+                &egui_ctx,
+                Event::Error(format!("Ajout du jeu: {message}")),
+            ),
+        }
+    });
+}
+
+fn slugify(title: &str) -> String {
+    let mut slug = String::new();
+    for ch in title.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug = slug.trim_matches('-').to_string();
+    let slug = if slug.is_empty() {
+        "external-game".to_string()
+    } else {
+        slug
+    };
+    slug.chars().take(72).collect()
+}
+
+fn spawn_play(
+    context: Arc<AppContext>,
+    slug: String,
+    events: UnboundedSender<Event>,
+    egui_ctx: eframe::egui::Context,
+) {
+    spawn_play_with_args(context, slug, Vec::new(), events, egui_ctx);
+}
+
+fn spawn_play_with_args(
+    context: Arc<AppContext>,
+    slug: String,
+    extra_args: Vec<String>,
+    events: UnboundedSender<Event>,
+    egui_ctx: eframe::egui::Context,
+) {
+    tokio::spawn(async move {
+        let entry = match context.catalog().find(&slug).await {
+            Ok(entry) => entry,
             Err(error) => {
                 emit(
                     &events,
@@ -495,7 +1322,28 @@ fn spawn_play(
                 return;
             }
         };
-        match context.launcher().launch(&entry, &game).await {
+        let title = entry
+            .as_ref()
+            .map(|entry| entry.title.clone())
+            .unwrap_or_else(|| game.title.clone());
+        let launched = if let Some(entry) = &entry {
+            context
+                .launcher()
+                .launch_with_extra_args(entry, &game, &extra_args)
+                .await
+        } else if game.source == recomp_core::library::InstallSource::External {
+            context
+                .launcher()
+                .launch_external_with_args(&game, &extra_args)
+        } else {
+            emit(
+                &events,
+                &egui_ctx,
+                Event::Error(format!("Jeu inconnu dans le catalogue: {slug}")),
+            );
+            return;
+        };
+        match launched {
             Ok(running) => {
                 let pid = running.pid;
                 let executable = running.executable.clone();
@@ -538,7 +1386,7 @@ fn spawn_play(
             Err(error) => emit(
                 &events,
                 &egui_ctx,
-                Event::Error(format!("Lancement de {}: {error}", entry.title)),
+                Event::Error(format!("Lancement de {title}: {error}")),
             ),
         }
     });
@@ -854,6 +1702,12 @@ async fn install_one(
     let _ = progress_task.await;
     let installed =
         installed.map_err(|error| format!("Installation de {}: {error}", entry.title))?;
+
+    if let Some(install_dir) = installed.game.install_dir() {
+        if let Err(error) = context.adapters().post_install(slug, install_dir) {
+            tracing::warn!(%slug, %error, "adapter post_install failed");
+        }
+    }
 
     emit(
         events,

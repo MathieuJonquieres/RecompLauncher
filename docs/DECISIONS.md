@@ -97,3 +97,52 @@ n'exécute jamais le contenu d'un mod.
 Le type de bibliothèque `external` stocke exécutable + arguments + dossier de travail, sans
 aucune connaissance du jeu. Il sert aux titres sans recomp publique (Smash Ultimate,
 Mario Kart 8 Deluxe) : le launcher ne fournit ni émulateur, ni clé, ni firmware.
+
+## 2026-10-21 — Métadonnées Wikipédia et cache 30 jours (M6)
+
+`WikipediaProvider` interroge uniquement l'API REST publique
+`/api/rest_v1/page/summary/{titre}` via `HttpClient` (User-Agent explicite, allowlist,
+taille bornée). La réponse est normalisée en `GameMetadata` et mise en cache dans
+`metadata_cache` avec `fetched_at`. Le cache est considéré frais pendant 30 jours ; si le
+réseau échoue après expiration, l'ancienne fiche est servie avec un indicateur « cache
+expiré » et le manifeste reste toujours affiché. L'attribution « Wikipédia — CC BY-SA 4.0 »
+et le lien source sont obligatoires dans l'UI.
+
+## 2026-10-21 — Serveurs, LAN, ping et amis locaux (M7)
+
+Les options en ligne ne sont rendues que si `online.supported = true` dans le manifeste.
+`OnlineService` agrège les entrées manuelles SQLite, une éventuelle liste JSON publique
+configurée par `online.servers_url` et les résultats mDNS de `_recomp._udp.local.`
+(configurable par `online.lan_service`). Les doublons sont éliminés par `host:port`.
+Le ping est un `TcpStream::connect` avec timeout de 2 s et au plus 16 connexions
+simultanées (`buffer_unordered`). `join_template` accepte `{address}`, `{port}` et
+`{endpoint}`. Le carnet d'amis (`friends`, `friend_handles`) est strictement local : aucun
+compte, aucune synchronisation et aucun envoi de données.
+
+## 2026-10-21 — Adaptateurs par slug (M8)
+
+`GameAdapter` expose `pre_launch`, `build_args`, `post_install` et
+`parse_server_status`, avec des implémentations par défaut neutres. `AdapterRegistry` est
+la seule association slug → logique spéciale ; `GameLauncher` consulte le registre après
+la résolution du manifeste et des mods. Aucun `if slug == ...` n'est dispersé dans le
+code. Les quatre cas du §7 sont couverts par `core::acceptance` avec des exécutables
+factices et des fichiers utilisateur factices, jamais du contenu de jeu.
+
+## 2026-10-21 — i18n, paramètres et packaging (M9)
+
+Les ressources Fluent sont dans `resources/i18n/{fr-FR,en-US}` avec repli `en-US` ;
+`Locale::Fr` est le défaut. Le choix de langue est persisté dans `ui.language` et appliqué
+immédiatement. La navigation, le catalogue (barre de filtres), la bibliothèque, la page
+Amis et les Paramètres sont localisés ; les fiches détaillées et quelques libellés
+dynamiques restent en français et seront migrés vers les mêmes clés. La page
+Paramètres expose langue, thème, proxy, URLs de manifeste/liste de serveurs, cache, export
+des logs et dossier de données. Le workflow `release.yml` construit des archives Windows,
+Linux et macOS sur tag `v*` ; les archives ne contiennent que le binaire et le README.
+
+## 2026-10-21 — Limites assumées
+
+- L'URL du site « recomp » reste inconnue : `RecompSiteProvider` n'est pas activé.
+- Les installations réelles depuis GitHub ne sont pas testées sur cette machine sans
+  réseau ; les tests utilisent wiremock et des archives générées.
+- La traduction complète des fiches détaillées est un travail de finition ; la
+  navigation, les listes, les Amis et les Paramètres sont déjà localisés FR/EN.

@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use eframe::egui::{self, Color32, RichText};
 use recomp_core::catalog::model::{GameEntry, ModStrategy};
 use recomp_core::db::now_unix;
+use recomp_core::i18n::I18n;
 use recomp_core::library::{InstallSource, LibraryGame};
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -65,17 +66,29 @@ impl LibraryView {
         self.installs.remove(slug);
     }
 
-    pub fn show_central(&mut self, ui: &mut egui::Ui, commands: &UnboundedSender<Command>) {
+    pub fn show_central(
+        &mut self,
+        ui: &mut egui::Ui,
+        commands: &UnboundedSender<Command>,
+        i18n: &I18n,
+    ) {
         ui.horizontal(|ui| {
-            ui.heading("Bibliothèque");
+            ui.heading(i18n.text("library-title"));
             ui.label(
-                RichText::new(format!("{} jeu(x)", self.games.len()))
-                    .small()
-                    .weak(),
+                RichText::new(format!(
+                    "{} {}",
+                    self.games.len(),
+                    i18n.text("library-games")
+                ))
+                .small()
+                .weak(),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Actualiser").clicked() {
+                if ui.button(i18n.text("library-refresh")).clicked() {
                     let _ = commands.send(Command::RefreshLibrary);
+                }
+                if ui.button(i18n.text("library-add-external")).clicked() {
+                    let _ = commands.send(Command::PickExternalGame);
                 }
             });
         });
@@ -83,7 +96,7 @@ impl LibraryView {
         ui.horizontal(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.search)
-                    .hint_text("Filtrer par titre ou slug…")
+                    .hint_text(i18n.text("library-filter"))
                     .desired_width(260.0),
             );
         });
@@ -92,15 +105,9 @@ impl LibraryView {
         if self.games.is_empty() {
             ui.add_space(40.0);
             ui.vertical_centered(|ui| {
-                ui.label(
-                    RichText::new(
-                        "Votre bibliothèque est vide. Installez un jeu depuis le catalogue \
-                         ou ajoutez un jeu externe.",
-                    )
-                    .weak(),
-                );
+                ui.label(RichText::new(i18n.text("library-empty")).weak());
             });
-            self.uninstall_dialog(ui.ctx(), commands);
+            self.uninstall_dialog(ui.ctx(), commands, i18n);
             return;
         }
 
@@ -118,9 +125,9 @@ impl LibraryView {
         if filtered.is_empty() {
             ui.add_space(30.0);
             ui.vertical_centered(|ui| {
-                ui.label(RichText::new("Aucun jeu ne correspond à ce filtre.").weak());
+                ui.label(RichText::new(i18n.text("library-no-match")).weak());
             });
-            self.uninstall_dialog(ui.ctx(), commands);
+            self.uninstall_dialog(ui.ctx(), commands, i18n);
             return;
         }
 
@@ -129,14 +136,14 @@ impl LibraryView {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for game in filtered {
-                    self.game_row(ui, game, commands, &mut request_uninstall);
+                    self.game_row(ui, game, commands, &mut request_uninstall, i18n);
                     ui.add_space(6.0);
                 }
             });
         if request_uninstall.is_some() {
             self.pending_uninstall = request_uninstall;
         }
-        self.uninstall_dialog(ui.ctx(), commands);
+        self.uninstall_dialog(ui.ctx(), commands, i18n);
     }
 
     fn game_row(
@@ -145,6 +152,7 @@ impl LibraryView {
         game: &LibraryGame,
         commands: &UnboundedSender<Command>,
         request_uninstall: &mut Option<String>,
+        i18n: &I18n,
     ) {
         egui::Frame::group(ui.style())
             .inner_margin(12.0)
@@ -167,26 +175,31 @@ impl LibraryView {
                         );
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                        if ui.button(RichText::new("▶ Jouer").strong()).clicked() {
+                        if ui
+                            .button(
+                                RichText::new(format!("▶ {}", i18n.text("library-play"))).strong(),
+                            )
+                            .clicked()
+                        {
                             let _ = commands.send(Command::Play {
                                 slug: game.slug.clone(),
                             });
                         }
-                        if ui.button("Retirer").clicked() {
+                        if ui.button(i18n.text("library-remove")).clicked() {
                             *request_uninstall = Some(game.slug.clone());
                         }
                         if game.source == InstallSource::Managed {
-                            if ui.button("Réparer").clicked() {
+                            if ui.button(i18n.text("library-repair")).clicked() {
                                 let _ = commands.send(Command::Repair {
                                     slug: game.slug.clone(),
                                 });
                             }
-                            if ui.button("Réinstaller").clicked() {
+                            if ui.button(i18n.text("library-reinstall")).clicked() {
                                 let _ = commands.send(Command::Install {
                                     slug: game.slug.clone(),
                                 });
                             }
-                            if ui.button("Choisir mon fichier").clicked() {
+                            if ui.button(i18n.text("library-choose-file")).clicked() {
                                 let _ = commands.send(Command::SelectUserFile {
                                     slug: game.slug.clone(),
                                 });
@@ -195,7 +208,7 @@ impl LibraryView {
                         if let Some(path) =
                             game.install_path.as_ref().or(game.external_exe.as_ref())
                         {
-                            if ui.button("Ouvrir le dossier").clicked() {
+                            if ui.button(i18n.text("library-open-folder")).clicked() {
                                 let target = if path.is_dir() {
                                     path.clone()
                                 } else {
@@ -207,17 +220,17 @@ impl LibraryView {
                             }
                         }
                         if self.mods_supported.contains(&game.slug) {
-                            if ui.button("Créer le dossier mods").clicked() {
+                            if ui.button(i18n.text("library-create-mods")).clicked() {
                                 let _ = commands.send(Command::CreateModsDir {
                                     slug: game.slug.clone(),
                                 });
                             }
-                            if ui.button("Ouvrir les mods").clicked() {
+                            if ui.button(i18n.text("library-open-mods")).clicked() {
                                 let _ = commands.send(Command::OpenModsDir {
                                     slug: game.slug.clone(),
                                 });
                             }
-                            if ui.button("Actualiser les mods").clicked() {
+                            if ui.button(i18n.text("library-refresh-mods")).clicked() {
                                 let _ = commands.send(Command::RefreshMods {
                                     slug: game.slug.clone(),
                                 });
@@ -311,7 +324,7 @@ impl LibraryView {
                             });
                         }
                     }
-                    if ui.button("Annuler l'installation").clicked() {
+                    if ui.button(i18n.text("library-cancel-install")).clicked() {
                         let _ = commands.send(Command::CancelInstall {
                             slug: game.slug.clone(),
                         });
@@ -320,7 +333,12 @@ impl LibraryView {
             });
     }
 
-    fn uninstall_dialog(&mut self, ctx: &egui::Context, commands: &UnboundedSender<Command>) {
+    fn uninstall_dialog(
+        &mut self,
+        ctx: &egui::Context,
+        commands: &UnboundedSender<Command>,
+        i18n: &I18n,
+    ) {
         let Some(slug) = self.pending_uninstall.clone() else {
             return;
         };
@@ -358,10 +376,10 @@ impl LibraryView {
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Retirer").clicked() {
+                    if ui.button(i18n.text("library-remove")).clicked() {
                         confirm = true;
                     }
-                    if ui.button("Annuler").clicked() {
+                    if ui.button(i18n.text("library-cancel")).clicked() {
                         cancel = true;
                     }
                 });

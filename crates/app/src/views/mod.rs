@@ -2,11 +2,14 @@
 //! `Command`s through the backend bridge.
 
 pub mod catalog;
+pub mod friends;
 pub mod library;
+pub mod settings;
 
 use std::path::PathBuf;
 
 use recomp_core::library::ModRecord;
+use recomp_core::metadata::GameMetadata;
 use recomp_core::mods::ModsSnapshot;
 
 /// Mods state for one game, shared by the catalog detail and library pages.
@@ -34,6 +37,25 @@ impl ModsUiState {
         }
     }
 
+    pub fn loading() -> Self {
+        Self {
+            loading: true,
+            ..Self::default()
+        }
+    }
+}
+
+/// Public encyclopedic metadata state for one game.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MetadataUiState {
+    pub metadata: Option<GameMetadata>,
+    pub from_cache: bool,
+    pub stale: bool,
+    pub error: Option<String>,
+    pub loading: bool,
+}
+
+impl MetadataUiState {
     pub fn loading() -> Self {
         Self {
             loading: true,

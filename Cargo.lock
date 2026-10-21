@@ -3968,6 +3968,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "unic-langid",
  "url",
  "wiremock",
  "xz2",

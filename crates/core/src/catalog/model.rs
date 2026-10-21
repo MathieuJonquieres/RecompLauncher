@@ -419,6 +419,12 @@ pub struct OnlineSpec {
     pub supported: bool,
     #[serde(default)]
     pub modes: Vec<OnlineMode>,
+    /// Optional launch template, e.g. `--connect {endpoint}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub join_template: Option<String>,
+    /// Optional mDNS service type; defaults to `_recomp._udp.local.`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lan_service: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

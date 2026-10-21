@@ -10,17 +10,23 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(test)]
+mod acceptance;
+pub mod adapters;
 pub mod archive;
 pub mod catalog;
 pub mod ctx;
 pub mod db;
 pub mod error;
 pub mod hash;
+pub mod i18n;
 pub mod launch;
 pub mod library;
 pub mod logging;
+pub mod metadata;
 pub mod mods;
 pub mod net;
+pub mod online;
 pub mod paths;
 pub mod settings;
 
