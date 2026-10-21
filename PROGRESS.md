@@ -20,7 +20,7 @@ Jalon **M6** — fiche jeu enrichie (WikipediaProvider + attribution).
   (85 core, 0 app, 0 testkit)
 - `cargo clippy --workspace --all-targets -- -D warnings` : **OK**
 - `cargo fmt --all -- --check` : **OK**
-- Dernier commit sain : `c95bf42` (M5)
+- Dernier commit sain : `066f92d` (M5)
 - Travail non commité : aucun
 - Vérification manuelle : `target/debug/recomp-launcher.exe` démarre en mode portable ;
   catalogue (6 entrées), Bibliothèque avec une fiche factice, boutons « Jouer »,
