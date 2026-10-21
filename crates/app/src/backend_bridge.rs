@@ -16,16 +16,17 @@ use tokio_util::sync::CancellationToken;
 use recomp_core::catalog::github_releases::{select_asset, GitHubReleasesProvider, SelectedAsset};
 use recomp_core::catalog::model::{ModStrategy, Os};
 use recomp_core::catalog::service::CatalogSnapshot;
+use recomp_core::fs_usage;
 use recomp_core::library::install::{
     remove_install_preserving_userdata, AssetDownload, InstallManager,
 };
 use recomp_core::library::LibraryGame;
 use recomp_core::metadata::GameMetadata;
 use recomp_core::mods::ModsSnapshot;
-use recomp_core::online::{join_entry_args, Friend, ServerInfo, ServerList};
+use recomp_core::online::{join_entry_args, ServerInfo, ServerList};
 use recomp_core::settings::{
-    KEY_CATALOG_MANIFEST_URL, KEY_GITHUB_TOKEN, KEY_INSTALL_DIR, KEY_LANGUAGE, KEY_PROXY,
-    KEY_SERVERS_URL, KEY_THEME,
+    KEY_CATALOG_MANIFEST_URL, KEY_DIAGNOSTICS, KEY_GITHUB_TOKEN, KEY_INSTALL_DIR, KEY_LANGUAGE,
+    KEY_PROXY, KEY_SERVERS_URL, KEY_THEME,
 };
 use recomp_core::AppContext;
 
@@ -34,12 +35,21 @@ use recomp_core::AppContext;
 pub struct SettingsSnapshot {
     pub language: String,
     pub dark_theme: bool,
+    pub diagnostics: bool,
     pub proxy: String,
     pub manifest_url: String,
     pub servers_url: String,
     pub install_dir: String,
     pub data_dir: String,
     pub portable: bool,
+}
+
+/// Disk usage shown by the library statistics and the settings page.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StorageStats {
+    pub games: u64,
+    pub cache: u64,
+    pub per_game: HashMap<String, u64>,
 }
 
 /// Requests sent by the UI.
@@ -63,6 +73,7 @@ pub enum Command {
     },
     Uninstall {
         slug: String,
+        delete_saves: bool,
     },
     Play {
         slug: String,
@@ -85,9 +96,8 @@ pub enum Command {
         slug: String,
         names: Vec<String>,
     },
-    ImportMods {
+    PickMods {
         slug: String,
-        paths: Vec<PathBuf>,
     },
     LoadMetadata {
         slug: String,
@@ -116,27 +126,16 @@ pub enum Command {
         address: String,
         port: u16,
     },
-    PickExternalGame,
-    PickManualGame {
-        slug: String,
-    },
-    LoadFriends,
-    AddFriend {
-        display_name: String,
-        notes: Option<String>,
-        handles: Vec<(String, String)>,
-    },
-    RemoveFriend {
-        id: i64,
-    },
     LoadSettings,
     SaveSettings {
         language: String,
         dark_theme: bool,
+        diagnostics: bool,
         proxy: String,
         manifest_url: String,
         servers_url: String,
     },
+    LoadStorageStats,
     ClearCache,
     ExportLogs,
     OpenDataDir,
@@ -148,6 +147,7 @@ pub enum Command {
 #[derive(Debug, Clone)]
 pub enum Event {
     Catalog(CatalogSnapshot),
+    CatalogFailed(String),
     CatalogRefreshing,
     Library(Vec<LibraryGame>),
     InstallStarted {
@@ -169,9 +169,9 @@ pub enum Event {
         slug: String,
         message: String,
     },
-    UserFileVerified {
+    UserFileCheck {
         slug: String,
-        label: String,
+        status: UserFileCheckStatus,
     },
     Uninstalled {
         slug: String,
@@ -214,7 +214,7 @@ pub enum Event {
         slug: String,
         list: ServerList,
     },
-    Friends(Vec<Friend>),
+    StorageStats(StorageStats),
     Settings(SettingsSnapshot),
     Error(String),
     Info(String),
@@ -241,14 +241,11 @@ enum ServerAction {
     DiscoverLan,
 }
 
-enum FriendsAction {
-    Load,
-    Add {
-        display_name: String,
-        notes: Option<String>,
-        handles: Vec<(String, String)>,
-    },
-    Remove(i64),
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UserFileCheckStatus {
+    Verified(String),
+    Rejected(String),
+    Cancelled,
 }
 
 /// Owns the backend runtime and channels.
@@ -403,8 +400,17 @@ async fn backend_loop(
             Command::SelectUserFile { slug } => {
                 spawn_user_file(Arc::clone(&context), slug, events.clone(), egui_ctx.clone());
             }
-            Command::Uninstall { slug } => {
-                spawn_uninstall(Arc::clone(&context), slug, events.clone(), egui_ctx.clone());
+            Command::Uninstall { slug, delete_saves } => {
+                spawn_uninstall(
+                    Arc::clone(&context),
+                    slug,
+                    delete_saves,
+                    events.clone(),
+                    egui_ctx.clone(),
+                );
+            }
+            Command::LoadStorageStats => {
+                spawn_storage_stats(Arc::clone(&context), events.clone(), egui_ctx.clone());
             }
             Command::Play { slug } => {
                 spawn_play(Arc::clone(&context), slug, events.clone(), egui_ctx.clone());
@@ -458,14 +464,8 @@ async fn backend_loop(
                     egui_ctx.clone(),
                 );
             }
-            Command::ImportMods { slug, paths } => {
-                spawn_mods_task(
-                    Arc::clone(&context),
-                    slug,
-                    ModsAction::Import(paths),
-                    events.clone(),
-                    egui_ctx.clone(),
-                );
+            Command::PickMods { slug } => {
+                spawn_pick_mods(Arc::clone(&context), slug, events.clone(), egui_ctx.clone());
             }
             Command::LoadMetadata { slug } => {
                 spawn_metadata(Arc::clone(&context), slug, events.clone(), egui_ctx.clone());
@@ -538,55 +538,13 @@ async fn backend_loop(
                     egui_ctx.clone(),
                 );
             }
-            Command::PickExternalGame => {
-                spawn_pick_game(Arc::clone(&context), None, events.clone(), egui_ctx.clone());
-            }
-            Command::PickManualGame { slug } => {
-                spawn_pick_game(
-                    Arc::clone(&context),
-                    Some(slug),
-                    events.clone(),
-                    egui_ctx.clone(),
-                );
-            }
-            Command::LoadFriends => {
-                spawn_friends(
-                    Arc::clone(&context),
-                    FriendsAction::Load,
-                    events.clone(),
-                    egui_ctx.clone(),
-                );
-            }
-            Command::AddFriend {
-                display_name,
-                notes,
-                handles,
-            } => {
-                spawn_friends(
-                    Arc::clone(&context),
-                    FriendsAction::Add {
-                        display_name,
-                        notes,
-                        handles,
-                    },
-                    events.clone(),
-                    egui_ctx.clone(),
-                );
-            }
-            Command::RemoveFriend { id } => {
-                spawn_friends(
-                    Arc::clone(&context),
-                    FriendsAction::Remove(id),
-                    events.clone(),
-                    egui_ctx.clone(),
-                );
-            }
             Command::LoadSettings => {
                 spawn_load_settings(Arc::clone(&context), events.clone(), egui_ctx.clone());
             }
             Command::SaveSettings {
                 language,
                 dark_theme,
+                diagnostics,
                 proxy,
                 manifest_url,
                 servers_url,
@@ -596,6 +554,7 @@ async fn backend_loop(
                     SettingsSnapshot {
                         language,
                         dark_theme,
+                        diagnostics,
                         proxy,
                         manifest_url,
                         servers_url,
@@ -693,7 +652,7 @@ async fn refresh_catalog(
         Err(error) => emit(
             events,
             egui_ctx,
-            Event::Error(format!("Actualisation du catalogue: {error}")),
+            Event::CatalogFailed(format!("Actualisation du catalogue: {error}")),
         ),
     }
 }
@@ -711,6 +670,41 @@ async fn emit_library(
             Event::Error(format!("Chargement de la bibliothèque: {error}")),
         ),
     }
+}
+
+fn spawn_storage_stats(
+    context: Arc<AppContext>,
+    events: UnboundedSender<Event>,
+    egui_ctx: eframe::egui::Context,
+) {
+    tokio::spawn(async move {
+        let games = context.library().list().await.unwrap_or_default();
+        let paths = context.paths().clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let mut stats = StorageStats {
+                cache: fs_usage::dir_size(&paths.cache_dir()),
+                ..StorageStats::default()
+            };
+            for game in games {
+                let Some(path) = game.install_path.as_ref() else {
+                    continue;
+                };
+                let size = fs_usage::dir_size(path);
+                stats.games = stats.games.saturating_add(size);
+                stats.per_game.insert(game.slug, size);
+            }
+            stats
+        })
+        .await;
+        match result {
+            Ok(stats) => emit(&events, &egui_ctx, Event::StorageStats(stats)),
+            Err(error) => emit(
+                &events,
+                &egui_ctx,
+                Event::Error(format!("Calcul de l'espace disque: {error}")),
+            ),
+        }
+    });
 }
 
 fn spawn_load_settings(
@@ -740,9 +734,14 @@ async fn read_settings(context: &AppContext) -> Result<SettingsSnapshot, String>
         .get_or(KEY_THEME, "dark")
         .await
         .map_err(|error| error.to_string())?;
+    let diagnostics = settings
+        .get_or(KEY_DIAGNOSTICS, "false")
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(SettingsSnapshot {
         language,
         dark_theme: theme != "light",
+        diagnostics: diagnostics == "true",
         proxy: settings
             .get_or(KEY_PROXY, "")
             .await
@@ -798,6 +797,14 @@ fn spawn_save_settings(
                 (
                     KEY_THEME,
                     if snapshot.dark_theme { "dark" } else { "light" },
+                ),
+                (
+                    KEY_DIAGNOSTICS,
+                    if snapshot.diagnostics {
+                        "true"
+                    } else {
+                        "false"
+                    },
                 ),
                 (KEY_PROXY, snapshot.proxy.trim()),
                 (KEY_CATALOG_MANIFEST_URL, snapshot.manifest_url.trim()),
@@ -1120,161 +1127,6 @@ fn spawn_join(
     });
 }
 
-fn spawn_friends(
-    context: Arc<AppContext>,
-    action: FriendsAction,
-    events: UnboundedSender<Event>,
-    egui_ctx: eframe::egui::Context,
-) {
-    tokio::spawn(async move {
-        let result = match action {
-            FriendsAction::Load => Ok(()),
-            FriendsAction::Add {
-                display_name,
-                notes,
-                handles,
-            } => context
-                .friends()
-                .add(&display_name, notes.as_deref(), handles)
-                .await
-                .map(|_| ())
-                .map_err(|error| format!("Ajout de l'ami: {error}")),
-            FriendsAction::Remove(id) => context
-                .friends()
-                .remove(id)
-                .await
-                .map(|_| ())
-                .map_err(|error| format!("Suppression de l'ami: {error}")),
-        };
-        if let Err(message) = result {
-            emit(&events, &egui_ctx, Event::Error(message));
-        }
-        match context.friends().list().await {
-            Ok(friends) => emit(&events, &egui_ctx, Event::Friends(friends)),
-            Err(error) => emit(
-                &events,
-                &egui_ctx,
-                Event::Error(format!("Chargement des amis: {error}")),
-            ),
-        }
-    });
-}
-
-fn spawn_pick_game(
-    context: Arc<AppContext>,
-    manual_slug: Option<String>,
-    events: UnboundedSender<Event>,
-    egui_ctx: eframe::egui::Context,
-) {
-    tokio::spawn(async move {
-        let picked = tokio::task::spawn_blocking(|| {
-            rfd::FileDialog::new()
-                .set_title("Choisir l'exécutable du jeu")
-                .pick_file()
-        })
-        .await;
-        let path = match picked {
-            Ok(Some(path)) => path,
-            Ok(None) => {
-                emit(
-                    &events,
-                    &egui_ctx,
-                    Event::Info("Sélection annulée.".to_string()),
-                );
-                return;
-            }
-            Err(error) => {
-                emit(
-                    &events,
-                    &egui_ctx,
-                    Event::Error(format!("Sélecteur de fichier: {error}")),
-                );
-                return;
-            }
-        };
-        let result = match manual_slug {
-            Some(slug) => {
-                let entry = context.catalog().find(&slug).await;
-                match entry {
-                    Ok(Some(entry)) => context
-                        .library()
-                        .add_manual(&slug, &entry.title, &path, None)
-                        .await
-                        .map(|game| game.title)
-                        .map_err(|error| error.to_string()),
-                    Ok(None) => Err(format!("Jeu inconnu dans le catalogue: {slug}")),
-                    Err(error) => Err(error.to_string()),
-                }
-            }
-            None => {
-                let title = path
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .unwrap_or("Jeu externe")
-                    .to_string();
-                let existing = context
-                    .library()
-                    .list()
-                    .await
-                    .map(|games| {
-                        games
-                            .into_iter()
-                            .map(|game| game.slug)
-                            .collect::<std::collections::HashSet<_>>()
-                    })
-                    .unwrap_or_default();
-                let base = slugify(&title);
-                let mut slug = base.clone();
-                let mut suffix = 2_u32;
-                while existing.contains(&slug) {
-                    slug = format!("{base}-{suffix}");
-                    suffix += 1;
-                }
-                let cwd = path.parent().map(std::path::Path::to_path_buf);
-                context
-                    .library()
-                    .add_external(&slug, &title, &path, None, cwd.as_deref())
-                    .await
-                    .map(|game| game.title)
-                    .map_err(|error| error.to_string())
-            }
-        };
-        match result {
-            Ok(title) => {
-                emit(
-                    &events,
-                    &egui_ctx,
-                    Event::Info(format!("{title} ajouté à la bibliothèque.")),
-                );
-                emit_library(&context, &events, &egui_ctx).await;
-            }
-            Err(message) => emit(
-                &events,
-                &egui_ctx,
-                Event::Error(format!("Ajout du jeu: {message}")),
-            ),
-        }
-    });
-}
-
-fn slugify(title: &str) -> String {
-    let mut slug = String::new();
-    for ch in title.chars() {
-        if ch.is_ascii_alphanumeric() {
-            slug.push(ch.to_ascii_lowercase());
-        } else if !slug.ends_with('-') {
-            slug.push('-');
-        }
-    }
-    let slug = slug.trim_matches('-').to_string();
-    let slug = if slug.is_empty() {
-        "external-game".to_string()
-    } else {
-        slug
-    };
-    slug.chars().take(72).collect()
-}
-
 fn spawn_play(
     context: Arc<AppContext>,
     slug: String,
@@ -1530,6 +1382,35 @@ async fn emit_mods(
     Ok(())
 }
 
+fn spawn_pick_mods(
+    context: Arc<AppContext>,
+    slug: String,
+    events: UnboundedSender<Event>,
+    egui_ctx: eframe::egui::Context,
+) {
+    tokio::spawn(async move {
+        let title = context
+            .catalog()
+            .find(&slug)
+            .await
+            .ok()
+            .flatten()
+            .map(|entry| entry.title)
+            .unwrap_or_else(|| slug.clone());
+        let files = rfd::AsyncFileDialog::new()
+            .set_title(format!("Importer des mods pour {title}"))
+            .add_filter("Archives", &["zip", "7z", "rar", "tar", "gz"])
+            .add_filter("Tous les fichiers", &["*"])
+            .pick_files()
+            .await;
+        let Some(files) = files else {
+            return;
+        };
+        let paths: Vec<PathBuf> = files.iter().map(|file| file.path().to_path_buf()).collect();
+        spawn_mods_task(context, slug, ModsAction::Import(paths), events, egui_ctx);
+    });
+}
+
 fn spawn_install(
     context: Arc<AppContext>,
     slug: String,
@@ -1774,7 +1655,10 @@ fn spawn_user_file(
             emit(
                 &events,
                 &egui_ctx,
-                Event::Info("Sélection annulée.".to_string()),
+                Event::UserFileCheck {
+                    slug: slug.clone(),
+                    status: UserFileCheckStatus::Cancelled,
+                },
             );
             return;
         };
@@ -1802,9 +1686,9 @@ fn spawn_user_file(
                 emit(
                     &events,
                     &egui_ctx,
-                    Event::UserFileVerified {
+                    Event::UserFileCheck {
                         slug: slug.clone(),
-                        label,
+                        status: UserFileCheckStatus::Verified(label),
                     },
                 );
             }
@@ -1817,24 +1701,36 @@ fn spawn_user_file(
                 emit(
                     &events,
                     &egui_ctx,
-                    Event::Error(format!(
-                        "Hash refusé pour {}. Calculé: {computed}. Attendu: {}",
-                        entry.title,
-                        accepted.join(", ")
-                    )),
+                    Event::UserFileCheck {
+                        slug: slug.clone(),
+                        status: UserFileCheckStatus::Rejected(format!(
+                            "Hash refusé. Calculé : {computed}. Attendu : {}",
+                            accepted.join(", ")
+                        )),
+                    },
                 );
             }
             Ok(_) => {
                 emit(
                     &events,
                     &egui_ctx,
-                    Event::Error("Fichier non vérifiable.".to_string()),
+                    Event::UserFileCheck {
+                        slug: slug.clone(),
+                        status: UserFileCheckStatus::Rejected(
+                            "Fichier non vérifiable.".to_string(),
+                        ),
+                    },
                 );
             }
             Err(error) => emit(
                 &events,
                 &egui_ctx,
-                Event::Error(format!("Vérification du fichier: {error}")),
+                Event::UserFileCheck {
+                    slug: slug.clone(),
+                    status: UserFileCheckStatus::Rejected(format!(
+                        "Vérification du fichier : {error}"
+                    )),
+                },
             ),
         }
     });
@@ -1843,6 +1739,7 @@ fn spawn_user_file(
 fn spawn_uninstall(
     context: Arc<AppContext>,
     slug: String,
+    delete_saves: bool,
     events: UnboundedSender<Event>,
     egui_ctx: eframe::egui::Context,
 ) {
@@ -1905,6 +1802,36 @@ fn spawn_uninstall(
                         Event::Error(format!("Tâche de suppression: {error}")),
                     ),
                 }
+            }
+        }
+        if delete_saves {
+            let userdata = context.paths().userdata_dir(&slug);
+            let path_for_remove = userdata.clone();
+            match tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&path_for_remove))
+                .await
+            {
+                Ok(Ok(())) => emit(
+                    &events,
+                    &egui_ctx,
+                    Event::Info(format!(
+                        "Sauvegardes supprimées dans {}.",
+                        userdata.display()
+                    )),
+                ),
+                Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Ok(Err(error)) => emit(
+                    &events,
+                    &egui_ctx,
+                    Event::Error(format!(
+                        "Sauvegardes non supprimées ({}): {error}",
+                        userdata.display()
+                    )),
+                ),
+                Err(error) => emit(
+                    &events,
+                    &egui_ctx,
+                    Event::Error(format!("Tâche de suppression des sauvegardes: {error}")),
+                ),
             }
         }
         emit(&events, &egui_ctx, Event::Uninstalled { slug });

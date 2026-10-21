@@ -458,6 +458,13 @@ mod tests {
 
     #[cfg(unix)]
     fn short_command() -> (PathBuf, String) {
-        (PathBuf::from("/bin/true"), String::new())
+        // `/bin/true` is not present on every Unix (macOS with a merged
+        // filesystem, for example), so pick the first real binary.
+        let executable = ["/usr/bin/true", "/bin/true"]
+            .into_iter()
+            .map(PathBuf::from)
+            .find(|path| path.is_file())
+            .unwrap_or_else(|| PathBuf::from("true"));
+        (executable, String::new())
     }
 }

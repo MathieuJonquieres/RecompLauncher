@@ -19,6 +19,7 @@ pub struct CatalogFilter {
     pub platform: Option<String>,
     pub kind: Option<GameKind>,
     pub status: Option<GameStatus>,
+    pub os: Option<Os>,
     pub os_only: bool,
     pub sort: CatalogSort,
 }
@@ -27,6 +28,11 @@ impl CatalogFilter {
     pub fn matches(&self, entry: &GameEntry) -> bool {
         if self.os_only && !entry.supports_os(Os::current()) {
             return false;
+        }
+        if let Some(os) = self.os {
+            if !entry.supports_os(os) {
+                return false;
+            }
         }
         if let Some(platform) = &self.platform {
             if !entry.original_platform.eq_ignore_ascii_case(platform) {
