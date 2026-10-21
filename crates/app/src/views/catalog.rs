@@ -3,7 +3,7 @@
 //! Pure presentation: filtering happens on an in-memory slice, every action
 //! that touches the network/disk is sent as a `Command`.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use eframe::egui::{self, Align, Color32, FontId, Layout, RichText, Sense, Vec2};
 use recomp_core::catalog::filter::{CatalogFilter, CatalogSort};
@@ -14,7 +14,7 @@ use recomp_core::library::{InstallSource, LibraryGame};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::backend_bridge::Command;
-use crate::views::InstallProgress;
+use crate::views::{InstallProgress, ModsUiState};
 
 const CARD_HEIGHT: f32 = 164.0;
 const CARD_MIN_WIDTH: f32 = 260.0;
@@ -30,6 +30,8 @@ pub struct CatalogView {
     pub errors: Vec<String>,
     pub library: Vec<LibraryGame>,
     pub installs: HashMap<String, InstallProgress>,
+    pub mods: HashMap<String, ModsUiState>,
+    mods_requested: HashSet<String>,
     pending_uninstall: Option<String>,
 }
 
@@ -63,6 +65,20 @@ impl CatalogView {
 
     pub fn install_finished(&mut self, slug: &str) {
         self.installs.remove(slug);
+    }
+
+    pub fn apply_mods(&mut self, slug: &str, state: ModsUiState) {
+        self.mods_requested.insert(slug.to_string());
+        self.mods.insert(slug.to_string(), state);
+    }
+
+    pub fn mods_failed(&mut self, slug: &str, message: impl Into<String>) {
+        let state = self
+            .mods
+            .entry(slug.to_string())
+            .or_insert_with(ModsUiState::loading);
+        state.loading = false;
+        state.error = Some(message.into());
     }
 
     fn installed(&self, slug: &str) -> Option<&LibraryGame> {
@@ -255,6 +271,10 @@ impl CatalogView {
 
         let installed = self.installed(entry.slug.as_str()).cloned();
         let progress = self.installs.get(entry.slug.as_str()).copied();
+        let mods_state = self.mods.get(entry.slug.as_str()).cloned();
+        let should_request_mods = entry.mods.supported
+            && !self.mods_requested.contains(entry.slug.as_str())
+            && mods_state.is_none();
         let compatible = entry.supports_os(Os::current());
         let mut request_uninstall = None;
         let mut open = true;
@@ -521,15 +541,149 @@ impl CatalogView {
 
                     ui.add_space(10.0);
                     ui.strong("Mods");
-                    if entry.mods.supported {
+                    if !entry.mods.supported || entry.mods.strategy == recomp_core::catalog::model::ModStrategy::None {
+                        ui.label(RichText::new("Mods non supportés par ce projet.").weak());
+                    } else {
                         ui.label(format!(
-                            "Dossier « {} » · format {} · stratégie {:?}",
+                            "Dossier « {} » · format {} · stratégie {}",
                             entry.mods.dir_name,
                             entry.mods.format_hint.as_deref().unwrap_or("libre"),
-                            entry.mods.strategy
+                            entry.mods.strategy.label()
                         ));
-                    } else {
-                        ui.label(RichText::new("Non supportés par ce projet.").weak());
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.button("Créer le dossier mods").clicked() {
+                                let _ = commands.send(Command::CreateModsDir {
+                                    slug: entry.slug.as_str().to_string(),
+                                });
+                            }
+                            if ui.button("Ouvrir").clicked() {
+                                let _ = commands.send(Command::OpenModsDir {
+                                    slug: entry.slug.as_str().to_string(),
+                                });
+                            }
+                            if ui.button("Actualiser").clicked() {
+                                let _ = commands.send(Command::RefreshMods {
+                                    slug: entry.slug.as_str().to_string(),
+                                });
+                            }
+                        });
+
+                        if let Some(state) = &mods_state {
+                            if state.loading {
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    ui.label(RichText::new("Scan des mods…").small().weak());
+                                });
+                            }
+                            if let Some(error) = &state.error {
+                                ui.label(
+                                    RichText::new(error)
+                                        .small()
+                                        .color(Color32::from_rgb(220, 130, 130)),
+                                );
+                            }
+                            if state.mods.is_empty() {
+                                ui.label(
+                                    RichText::new(
+                                        "Aucun mod détecté. Déposez un fichier mod dans la zone ci-dessous.",
+                                    )
+                                    .small()
+                                    .weak(),
+                                );
+                            }
+                            for (index, record) in state.mods.iter().enumerate() {
+                                ui.horizontal(|ui| {
+                                    let mut enabled = record.enabled;
+                                    if ui.checkbox(&mut enabled, &record.name).changed() {
+                                        let _ = commands.send(Command::ToggleMod {
+                                            slug: entry.slug.as_str().to_string(),
+                                            name: record.name.clone(),
+                                            enabled,
+                                        });
+                                    }
+                                    if !record.enabled {
+                                        ui.label(
+                                            RichText::new("désactivé").small().weak(),
+                                        );
+                                    }
+                                    ui.with_layout(
+                                        Layout::right_to_left(Align::Center),
+                                        |ui| {
+                                            if index + 1 < state.mods.len()
+                                                && ui.button("↓").clicked()
+                                            {
+                                                let mut names: Vec<String> = state
+                                                    .mods
+                                                    .iter()
+                                                    .map(|mod_record| mod_record.name.clone())
+                                                    .collect();
+                                                names.swap(index, index + 1);
+                                                let _ = commands.send(Command::ReorderMods {
+                                                    slug: entry.slug.as_str().to_string(),
+                                                    names,
+                                                });
+                                            }
+                                            if index > 0 && ui.button("↑").clicked() {
+                                                let mut names: Vec<String> = state
+                                                    .mods
+                                                    .iter()
+                                                    .map(|mod_record| mod_record.name.clone())
+                                                    .collect();
+                                                names.swap(index, index - 1);
+                                                let _ = commands.send(Command::ReorderMods {
+                                                    slug: entry.slug.as_str().to_string(),
+                                                    names,
+                                                });
+                                            }
+                                        },
+                                    );
+                                });
+                            }
+                        } else if should_request_mods {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(RichText::new("Chargement des mods…").small().weak());
+                            });
+                        }
+
+                        let drop_zone = egui::Frame::group(ui.style())
+                            .fill(ui.visuals().faint_bg_color)
+                            .inner_margin(8.0)
+                            .show(ui, |ui| {
+                                ui.label(
+                                    RichText::new(
+                                        "Glissez-déposez un fichier ou un dossier de mod ici.",
+                                    )
+                                    .small()
+                                    .weak(),
+                                );
+                            })
+                            .response;
+                        let dropped: Vec<std::path::PathBuf> = ui.input(|input| {
+                            input
+                                .raw
+                                .dropped_files
+                                .iter()
+                                .filter_map(|file| file.path.clone())
+                                .collect()
+                        });
+                        if !dropped.is_empty()
+                            && (drop_zone.hovered()
+                                || ui.rect_contains_pointer(ui.max_rect()))
+                        {
+                            let _ = commands.send(Command::ImportMods {
+                                slug: entry.slug.as_str().to_string(),
+                                paths: dropped,
+                            });
+                        }
+                        ui.label(
+                            RichText::new(
+                                "Les mods tiers sont fournis par des utilisateurs : vérifiez leur \
+                                 provenance. Le launcher ne les exécute jamais lui-même.",
+                            )
+                            .small()
+                            .color(Color32::from_rgb(210, 170, 100)),
+                        );
                     }
 
                     ui.add_space(10.0);
@@ -557,6 +711,11 @@ impl CatalogView {
 
         if let Some(slug) = request_uninstall {
             self.pending_uninstall = Some(slug);
+        }
+        if should_request_mods {
+            let slug = entry.slug.as_str().to_string();
+            self.mods_requested.insert(slug.clone());
+            let _ = commands.send(Command::RefreshMods { slug });
         }
         self.uninstall_dialog(ctx, commands);
         if !open {

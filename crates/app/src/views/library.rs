@@ -3,20 +3,23 @@
 //! The view never touches the filesystem or network. Every action is a
 //! `Command` handled by the backend, and state arrives through `Event::Library`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use eframe::egui::{self, Color32, RichText};
+use recomp_core::catalog::model::{GameEntry, ModStrategy};
 use recomp_core::db::now_unix;
 use recomp_core::library::{InstallSource, LibraryGame};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::backend_bridge::Command;
-use crate::views::InstallProgress;
+use crate::views::{InstallProgress, ModsUiState};
 
 #[derive(Default)]
 pub struct LibraryView {
     pub games: Vec<LibraryGame>,
     pub installs: HashMap<String, InstallProgress>,
+    pub mods: HashMap<String, ModsUiState>,
+    pub mods_supported: HashSet<String>,
     pub search: String,
     pending_uninstall: Option<String>,
 }
@@ -24,6 +27,28 @@ pub struct LibraryView {
 impl LibraryView {
     pub fn apply_library(&mut self, games: Vec<LibraryGame>) {
         self.games = games;
+    }
+
+    pub fn apply_catalog(&mut self, entries: &[GameEntry]) {
+        self.mods_supported.clear();
+        for entry in entries {
+            if entry.mods.supported && entry.mods.strategy != ModStrategy::None {
+                self.mods_supported.insert(entry.slug.as_str().to_string());
+            }
+        }
+    }
+
+    pub fn apply_mods(&mut self, slug: &str, state: ModsUiState) {
+        self.mods.insert(slug.to_string(), state);
+    }
+
+    pub fn mods_failed(&mut self, slug: &str, message: impl Into<String>) {
+        let state = self
+            .mods
+            .entry(slug.to_string())
+            .or_insert_with(ModsUiState::loading);
+        state.loading = false;
+        state.error = Some(message.into());
     }
 
     pub fn install_started(&mut self, slug: &str) {
@@ -142,6 +167,11 @@ impl LibraryView {
                         );
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                        if ui.button(RichText::new("▶ Jouer").strong()).clicked() {
+                            let _ = commands.send(Command::Play {
+                                slug: game.slug.clone(),
+                            });
+                        }
                         if ui.button("Retirer").clicked() {
                             *request_uninstall = Some(game.slug.clone());
                         }
@@ -174,6 +204,23 @@ impl LibraryView {
                                         .unwrap_or_else(|| path.clone())
                                 };
                                 let _ = commands.send(Command::OpenPath(target));
+                            }
+                        }
+                        if self.mods_supported.contains(&game.slug) {
+                            if ui.button("Créer le dossier mods").clicked() {
+                                let _ = commands.send(Command::CreateModsDir {
+                                    slug: game.slug.clone(),
+                                });
+                            }
+                            if ui.button("Ouvrir les mods").clicked() {
+                                let _ = commands.send(Command::OpenModsDir {
+                                    slug: game.slug.clone(),
+                                });
+                            }
+                            if ui.button("Actualiser les mods").clicked() {
+                                let _ = commands.send(Command::RefreshMods {
+                                    slug: game.slug.clone(),
+                                });
                             }
                         }
                     });
@@ -220,6 +267,26 @@ impl LibraryView {
                         .weak(),
                     );
                 });
+
+                if let Some(state) = self.mods.get(&game.slug) {
+                    let enabled = state.mods.iter().filter(|record| record.enabled).count();
+                    ui.label(
+                        RichText::new(format!(
+                            "Mods : {} détecté(s), {} activé(s)",
+                            state.mods.len(),
+                            enabled
+                        ))
+                        .small()
+                        .weak(),
+                    );
+                    if let Some(error) = &state.error {
+                        ui.label(
+                            RichText::new(error)
+                                .small()
+                                .color(Color32::from_rgb(220, 130, 130)),
+                        );
+                    }
+                }
 
                 if let Some(progress) = self.installs.get(&game.slug).copied() {
                     ui.add_space(4.0);

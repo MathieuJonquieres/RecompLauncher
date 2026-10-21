@@ -1,38 +1,33 @@
 # PROGRESS — RecompLauncher
 
-_Dernière mise à jour : 2026-10-21 — session n°2_
+_Dernière mise à jour : 2026-10-21 — session n°3_
 
 ## ▶ Prochaine action (la plus importante du fichier)
 
-Jalon **M5** — `GameLauncher` + `ModManager`.
-1. Créer `crates/core/src/launch/` : résolution de l'exécutable depuis `library_games`
-   + `LaunchSpec` du manifeste, arguments, `current_dir`, `std::process::Command`
-   (pas de shell), suivi du PID et enregistrement du temps de jeu via
-   `Library::record_playtime`.
-2. Créer `crates/core/src/mods/` : scan du dossier `mods.dir_name`, détection des
-   sous-dossiers/fichiers, activation/désactivation persistée dans la table `mods`,
-   et génération des arguments/liens nécessaires au lancement.
-3. Ajouter les commandes `Play`, `CreateModsDir`, `ToggleMod`, `RefreshMods` et les
-   événements associés dans `backend_bridge.rs`.
-4. Ajouter le bouton « Jouer » dans la page Bibliothèque et « Créer le dossier mods »
-   dans la fiche jeu. Test d'acceptation : un mod détecté est pris en compte au
-   lancement (utiliser un faux exécutable de test, jamais un jeu réel).
-5. Passer M5 ✅ avec `cargo test --workspace --all-targets`,
+Jalon **M6** — fiche jeu enrichie (WikipediaProvider + attribution).
+1. Ajouter le provider Wikipédia (API REST, cache SQLite `metadata_cache`, attribution
+   obligatoire et timeout).
+2. Enrichir le panneau de détail avec description, liens, dates et mention de source.
+3. Garder le fonctionnement hors ligne : la fiche doit rester lisible sans réseau.
+4. Passer M6 ✅ avec `cargo test --workspace --all-targets`,
    `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all -- --check`,
-   puis mettre à jour `PROGRESS.md` et commiter M5.
+   puis mettre à jour `PROGRESS.md` et commiter M6.
 
 ## État de la build
 
 - `cargo build --workspace` : **OK** (Windows GNU local ; CI MSVC/Linux/macOS)
-- `cargo test --workspace --all-targets` : **75 passés / 0 échoué / 0 ignoré**
-  (75 core, 0 app, 0 testkit)
+- `cargo test --workspace --all-targets` : **85 passés / 0 échoué / 0 ignoré**
+  (85 core, 0 app, 0 testkit)
 - `cargo clippy --workspace --all-targets -- -D warnings` : **OK**
 - `cargo fmt --all -- --check` : **OK**
-- Dernier commit sain : `bec0c08` (M0–M3)
-- Travail non commité : M4 (à commiter après cette mise à jour)
-- Vérification manuelle : `target/debug/recomp-launcher.exe` démarre, affiche le
-  catalogue (6 entrées), la page Bibliothèque et le panneau de détail avec le bouton
-  « Installer » ; captures dans `%TEMP%\recomp-launcher-*.png`.
+- Dernier commit sain : `c95bf42` (M5)
+- Travail non commité : aucun
+- Vérification manuelle : `target/debug/recomp-launcher.exe` démarre en mode portable ;
+  catalogue (6 entrées), Bibliothèque avec une fiche factice, boutons « Jouer »,
+  « Créer le dossier mods », « Ouvrir les mods » et « Actualiser les mods » visibles.
+  Capture : `%TEMP%\recomp-ui-proof\library6.png`. Le test
+  `launch::tests::detected_mod_args_reach_a_fake_executable` lance un faux exécutable
+  (`cmd.exe` en test) et vérifie que le chemin du mod détecté lui est bien transmis.
 
 ## Jalons (§8 du spec)
 
@@ -43,7 +38,7 @@ Jalon **M5** — `GameLauncher` + `ModManager`.
 | M2 | HttpClient, ManifestProvider, CatalogService + cache | ✅ | tests wiremock (ETag, retries, limites), cache hors ligne, migrations v1→v2 |
 | M3 | UI Catalogue (virtualisée, filtres, détail) | ✅ | `show_rows` + test 500 entrées, lancement app, détail/panneau, bandeau hors ligne |
 | M4 | InstallManager + Library + page Bibliothèque + vérif hash | ✅ | 75 tests core ; install ZIP wiremock, rollback archive malveillante, hash SHA-256, reprise `Range`, extraction sécurisée ZIP/tar/7z, réparation, désinstallation conservant `userdata/`/`mods/` ; UI Bibliothèque + détail vérifiés par captures |
-| M5 | GameLauncher + ModManager + bouton « Créer le dossier mods » | 🟡 en cours | — |
+| M5 | GameLauncher + ModManager + bouton « Créer le dossier mods » | ✅ | 85 tests core ; résolution manifeste/OS, `std::process::Command` sans shell, PID + temps de jeu, scan/toggle/ordre/import, miroir `native_dir`, arguments `args`, faux exécutable recevant un mod détecté, UI Bibliothèque vérifiée par capture |
 | M6 | Fiche jeu + WikipediaProvider + attribution | ⬜ à faire | — |
 | M7 | Online : serveur local, serveurs publics, LAN, manuel | ⬜ à faire | — |
 | M8 | Jeu externe + adaptateurs + test des 4 cas §7 | ⬜ à faire | — |
@@ -55,7 +50,8 @@ Jalon **M5** — `GameLauncher` + `ModManager`.
   et Bibliothèque fonctionnels ; Amis M7 ; Paramètres encore partiels)*
 - [ ] Catalogue complet issu des providers, filtrable, utilisable hors ligne.
 - [ ] Fiche jeu avec données Wikipédia + attribution.
-- [ ] Bouton « Créer le dossier mods » + prise en compte des mods au lancement.
+- [x] Bouton « Créer le dossier mods » + prise en compte des mods au lancement
+  (scan, activation/désactivation, ordre, import, miroir `native_dir`, arguments `args`).
 - [ ] Options en ligne (local / public) uniquement quand déclarées.
 - [ ] Page Amis : serveurs (LAN, liste, manuel) + carnet d'amis local.
 - [ ] Les 4 cas de §7 passent en test d'acceptation.
@@ -66,10 +62,10 @@ Jalon **M5** — `GameLauncher` + `ModManager`.
 
 ## En cours (détail)
 
-- Tâche : **M5** — lancement des jeux et gestion des mods.
-- Fichiers à créer : `crates/core/src/launch/`, `crates/core/src/mods/`,
-  évolutions de `crates/app/src/backend_bridge.rs` et `views/library.rs`.
-- Ce qui reste : tout le pipeline de lancement + scan/activation des mods + tests.
+- Tâche : **M6** — fiche jeu enrichie et Wikipédia.
+- Fichiers à créer/modifier : `crates/core/src/metadata/`, `crates/core/src/catalog/`,
+  `crates/app/src/views/catalog.rs`, cache `metadata_cache`.
+- Ce qui reste : provider Wikipédia, cache hors ligne, attribution et tests wiremock.
 
 ## Décisions prises (résumé ; détail dans docs/DECISIONS.md)
 
@@ -92,6 +88,16 @@ Jalon **M5** — `GameLauncher` + `ModManager`.
   `userdata/` et `mods/` ; les dumps utilisateur ne sont jamais copiés ni supprimés.
 - 2026-10-21 — M4 : « Réparer » vérifie d'abord l'existence du dossier/exécutable/
   fichier utilisateur ; réinstalle depuis la dernière release seulement si nécessaire.
+- 2026-10-21 — M5 : lancement direct avec `std::process::Command` (jamais de shell),
+  chemin d'exécutable validé par `SafeRelPath`, PID exposé, temps de jeu enregistré
+  après la fin du processus.
+- 2026-10-21 — M5 : les mods activés vivent dans `games/<slug>/<dir_name>/`, les mods
+  désactivés dans `games/<slug>/<dir_name>.disabled/`. La stratégie `native_dir`
+  recopie uniquement les mods activés dans un miroir du dossier de travail ; elle ne
+  modifie jamais un dossier choisi manuellement. La stratégie `args` substitue
+  `{path}`/`{name}` jeton par jeton.
+- 2026-10-21 — M5 : l'import ne prend que le dernier composant du chemin source et
+  refuse les liens symboliques ; le launcher n'exécute jamais le contenu d'un mod.
 
 ## Blocages / questions ouvertes
 
@@ -129,6 +135,12 @@ Jalon **M5** — `GameLauncher` + `ModManager`.
 
 ## Journal de sessions (le plus récent en haut)
 
+- Session 3 (2026-10-21) : M5 terminé — `GameLauncher` (résolution manifeste/OS,
+  `std::process::Command` sans shell, PID, temps de jeu), `ModManager` (scan,
+  activation/désactivation `.disabled`, ordre, import sécurisé, miroir `native_dir`,
+  arguments `args`), commandes/événements backend et UI Bibliothèque/détail. Test
+  d'acceptation avec faux exécutable recevant le chemin d'un mod détecté. 85 tests
+  core verts, clippy/fmt verts, capture Bibliothèque. Prochaine étape : M6.
 - Session 2 (2026-10-21) : M4 terminé — hash SHA-1/SHA-256/MD5/CRC32, extraction
   sécurisée ZIP/tar/tar.gz/tar.xz/7z avec `SafeRelPath`/proptest, downloader
   streaming avec reprise et annulation, `Library` SQLite, pipeline d'installation

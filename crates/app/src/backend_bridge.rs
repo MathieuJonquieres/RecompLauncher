@@ -14,12 +14,13 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio_util::sync::CancellationToken;
 
 use recomp_core::catalog::github_releases::{select_asset, GitHubReleasesProvider, SelectedAsset};
-use recomp_core::catalog::model::Os;
+use recomp_core::catalog::model::{ModStrategy, Os};
 use recomp_core::catalog::service::CatalogSnapshot;
 use recomp_core::library::install::{
     remove_install_preserving_userdata, AssetDownload, InstallManager,
 };
 use recomp_core::library::LibraryGame;
+use recomp_core::mods::ModsSnapshot;
 use recomp_core::settings::KEY_GITHUB_TOKEN;
 use recomp_core::AppContext;
 
@@ -44,6 +45,31 @@ pub enum Command {
     },
     Uninstall {
         slug: String,
+    },
+    Play {
+        slug: String,
+    },
+    CreateModsDir {
+        slug: String,
+    },
+    OpenModsDir {
+        slug: String,
+    },
+    RefreshMods {
+        slug: String,
+    },
+    ToggleMod {
+        slug: String,
+        name: String,
+        enabled: bool,
+    },
+    ReorderMods {
+        slug: String,
+        names: Vec<String>,
+    },
+    ImportMods {
+        slug: String,
+        paths: Vec<PathBuf>,
     },
     OpenUrl(String),
     OpenPath(PathBuf),
@@ -81,8 +107,44 @@ pub enum Event {
     Uninstalled {
         slug: String,
     },
+    GameStarted {
+        slug: String,
+        pid: u32,
+        executable: PathBuf,
+    },
+    GameExited {
+        slug: String,
+        seconds: u64,
+        code: Option<i32>,
+        success: bool,
+    },
+    Mods {
+        slug: String,
+        snapshot: ModsSnapshot,
+    },
+    ModsDirReady {
+        slug: String,
+        path: PathBuf,
+    },
+    ModsImported {
+        slug: String,
+        count: usize,
+    },
+    ModsFailed {
+        slug: String,
+        message: String,
+    },
     Error(String),
     Info(String),
+}
+
+enum ModsAction {
+    CreateDir,
+    OpenDir,
+    Refresh,
+    Toggle { name: String, enabled: bool },
+    Reorder(Vec<String>),
+    Import(Vec<PathBuf>),
 }
 
 /// Owns the backend runtime and channels.
@@ -240,6 +302,67 @@ async fn backend_loop(
             Command::Uninstall { slug } => {
                 spawn_uninstall(Arc::clone(&context), slug, events.clone(), egui_ctx.clone());
             }
+            Command::Play { slug } => {
+                spawn_play(Arc::clone(&context), slug, events.clone(), egui_ctx.clone());
+            }
+            Command::CreateModsDir { slug } => {
+                spawn_mods_task(
+                    Arc::clone(&context),
+                    slug,
+                    ModsAction::CreateDir,
+                    events.clone(),
+                    egui_ctx.clone(),
+                );
+            }
+            Command::OpenModsDir { slug } => {
+                spawn_mods_task(
+                    Arc::clone(&context),
+                    slug,
+                    ModsAction::OpenDir,
+                    events.clone(),
+                    egui_ctx.clone(),
+                );
+            }
+            Command::RefreshMods { slug } => {
+                spawn_mods_task(
+                    Arc::clone(&context),
+                    slug,
+                    ModsAction::Refresh,
+                    events.clone(),
+                    egui_ctx.clone(),
+                );
+            }
+            Command::ToggleMod {
+                slug,
+                name,
+                enabled,
+            } => {
+                spawn_mods_task(
+                    Arc::clone(&context),
+                    slug,
+                    ModsAction::Toggle { name, enabled },
+                    events.clone(),
+                    egui_ctx.clone(),
+                );
+            }
+            Command::ReorderMods { slug, names } => {
+                spawn_mods_task(
+                    Arc::clone(&context),
+                    slug,
+                    ModsAction::Reorder(names),
+                    events.clone(),
+                    egui_ctx.clone(),
+                );
+            }
+            Command::ImportMods { slug, paths } => {
+                spawn_mods_task(
+                    Arc::clone(&context),
+                    slug,
+                    ModsAction::Import(paths),
+                    events.clone(),
+                    egui_ctx.clone(),
+                );
+            }
             Command::OpenUrl(url) => {
                 if !url.starts_with("https://") {
                     emit(
@@ -325,6 +448,238 @@ async fn emit_library(
             Event::Error(format!("Chargement de la bibliothèque: {error}")),
         ),
     }
+}
+
+fn spawn_play(
+    context: Arc<AppContext>,
+    slug: String,
+    events: UnboundedSender<Event>,
+    egui_ctx: eframe::egui::Context,
+) {
+    tokio::spawn(async move {
+        let entry = match context.catalog().find(&slug).await {
+            Ok(Some(entry)) => entry,
+            Ok(None) => {
+                emit(
+                    &events,
+                    &egui_ctx,
+                    Event::Error(format!("Jeu inconnu dans le catalogue: {slug}")),
+                );
+                return;
+            }
+            Err(error) => {
+                emit(
+                    &events,
+                    &egui_ctx,
+                    Event::Error(format!("Lecture du catalogue: {error}")),
+                );
+                return;
+            }
+        };
+        let game = match context.library().get(&slug).await {
+            Ok(Some(game)) => game,
+            Ok(None) => {
+                emit(
+                    &events,
+                    &egui_ctx,
+                    Event::Error(format!("{slug} n'est pas dans la bibliothèque.")),
+                );
+                return;
+            }
+            Err(error) => {
+                emit(
+                    &events,
+                    &egui_ctx,
+                    Event::Error(format!("Lecture de la bibliothèque: {error}")),
+                );
+                return;
+            }
+        };
+        match context.launcher().launch(&entry, &game).await {
+            Ok(running) => {
+                let pid = running.pid;
+                let executable = running.executable.clone();
+                emit(
+                    &events,
+                    &egui_ctx,
+                    Event::GameStarted {
+                        slug: slug.clone(),
+                        pid,
+                        executable,
+                    },
+                );
+                let launcher = context.launcher().clone();
+                let context_for_wait = Arc::clone(&context);
+                let events_for_wait = events.clone();
+                let ctx_for_wait = egui_ctx.clone();
+                tokio::spawn(async move {
+                    match launcher.wait_for_exit(running).await {
+                        Ok(exit) => {
+                            emit(
+                                &events_for_wait,
+                                &ctx_for_wait,
+                                Event::GameExited {
+                                    slug: exit.slug.clone(),
+                                    seconds: exit.seconds,
+                                    code: exit.code,
+                                    success: exit.success,
+                                },
+                            );
+                            emit_library(&context_for_wait, &events_for_wait, &ctx_for_wait).await;
+                        }
+                        Err(error) => emit(
+                            &events_for_wait,
+                            &ctx_for_wait,
+                            Event::Error(format!("Suivi du processus: {error}")),
+                        ),
+                    }
+                });
+            }
+            Err(error) => emit(
+                &events,
+                &egui_ctx,
+                Event::Error(format!("Lancement de {}: {error}", entry.title)),
+            ),
+        }
+    });
+}
+
+fn spawn_mods_task(
+    context: Arc<AppContext>,
+    slug: String,
+    action: ModsAction,
+    events: UnboundedSender<Event>,
+    egui_ctx: eframe::egui::Context,
+) {
+    tokio::spawn(async move {
+        if let Err(message) = run_mods_action(&context, &slug, action, &events, &egui_ctx).await {
+            emit(
+                &events,
+                &egui_ctx,
+                Event::ModsFailed {
+                    slug: slug.clone(),
+                    message,
+                },
+            );
+        }
+    });
+}
+
+async fn run_mods_action(
+    context: &Arc<AppContext>,
+    slug: &str,
+    action: ModsAction,
+    events: &UnboundedSender<Event>,
+    egui_ctx: &eframe::egui::Context,
+) -> Result<(), String> {
+    let entry = context
+        .catalog()
+        .find(slug)
+        .await
+        .map_err(|error| format!("Lecture du catalogue: {error}"))?
+        .ok_or_else(|| format!("Jeu inconnu dans le catalogue: {slug}"))?;
+    if !entry.mods.supported || entry.mods.strategy == ModStrategy::None {
+        return Err(format!("{} ne supporte pas les mods.", entry.title));
+    }
+    match action {
+        ModsAction::CreateDir => {
+            let path = context
+                .mods()
+                .create_dir(slug, &entry.mods)
+                .await
+                .map_err(|error| format!("Création du dossier mods: {error}"))?;
+            emit(
+                events,
+                egui_ctx,
+                Event::ModsDirReady {
+                    slug: slug.to_string(),
+                    path,
+                },
+            );
+            emit_mods(context, slug, events, egui_ctx).await?;
+        }
+        ModsAction::OpenDir => {
+            let dir = context.mods().enabled_dir(slug, &entry.mods.dir_name);
+            if !dir.is_dir() {
+                return Err(format!(
+                    "Le dossier mods n'existe pas encore: {}",
+                    dir.display()
+                ));
+            }
+            tokio::task::spawn_blocking(move || opener::open(dir))
+                .await
+                .map_err(|error| format!("Tâche d'ouverture: {error}"))?
+                .map_err(|error| format!("Ouverture du dossier mods: {error}"))?;
+        }
+        ModsAction::Refresh => {
+            emit_mods(context, slug, events, egui_ctx).await?;
+        }
+        ModsAction::Toggle { name, enabled } => {
+            context
+                .mods()
+                .toggle(slug, &entry.mods, &name, enabled)
+                .await
+                .map_err(|error| format!("Activation du mod {name}: {error}"))?;
+            emit_mods(context, slug, events, egui_ctx).await?;
+        }
+        ModsAction::Reorder(names) => {
+            context
+                .mods()
+                .reorder(slug, &entry.mods, names)
+                .await
+                .map_err(|error| format!("Réordonnancement des mods: {error}"))?;
+            emit_mods(context, slug, events, egui_ctx).await?;
+        }
+        ModsAction::Import(paths) => {
+            let mut count = 0;
+            for path in paths {
+                context
+                    .mods()
+                    .import_path(slug, &entry.mods, &path)
+                    .await
+                    .map_err(|error| format!("Import de {}: {error}", path.display()))?;
+                count += 1;
+            }
+            emit(
+                events,
+                egui_ctx,
+                Event::ModsImported {
+                    slug: slug.to_string(),
+                    count,
+                },
+            );
+            emit_mods(context, slug, events, egui_ctx).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn emit_mods(
+    context: &Arc<AppContext>,
+    slug: &str,
+    events: &UnboundedSender<Event>,
+    egui_ctx: &eframe::egui::Context,
+) -> Result<(), String> {
+    let entry = context
+        .catalog()
+        .find(slug)
+        .await
+        .map_err(|error| format!("Lecture du catalogue: {error}"))?
+        .ok_or_else(|| format!("Jeu inconnu dans le catalogue: {slug}"))?;
+    let snapshot = context
+        .mods()
+        .snapshot(slug, &entry.mods)
+        .await
+        .map_err(|error| format!("Scan des mods: {error}"))?;
+    emit(
+        events,
+        egui_ctx,
+        Event::Mods {
+            slug: slug.to_string(),
+            snapshot,
+        },
+    );
+    Ok(())
 }
 
 fn spawn_install(

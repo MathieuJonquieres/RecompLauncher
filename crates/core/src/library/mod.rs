@@ -2,6 +2,7 @@
 
 pub mod install;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Row};
@@ -83,6 +84,25 @@ impl LibraryGame {
             .as_deref()
             .or(self.install_path.as_deref())
     }
+}
+
+/// One row of the `mods` table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModRecord {
+    pub id: i64,
+    pub game_id: i64,
+    pub name: String,
+    pub path: PathBuf,
+    pub enabled: bool,
+    pub order: i64,
+}
+
+/// A detected mod before it is synchronised with the database.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModSeed {
+    pub name: String,
+    pub path: PathBuf,
+    pub enabled: bool,
 }
 
 #[derive(Clone)]
@@ -238,6 +258,119 @@ impl Library {
             .await
     }
 
+    /// Lists detected mods for a game, ordered by the user-defined order.
+    pub async fn list_mods(&self, slug: &str) -> Result<Vec<ModRecord>, DbError> {
+        let slug = slug.to_string();
+        self.db.with_conn(move |conn| query_mods(conn, &slug)).await
+    }
+
+    /// Reconciles the database with the mods currently found on disk.
+    ///
+    /// New mods are appended in detection order, existing rows keep their
+    /// order and toggle state is refreshed from the directory they live in.
+    pub async fn sync_mods(
+        &self,
+        slug: &str,
+        seeds: Vec<ModSeed>,
+    ) -> Result<Vec<ModRecord>, DbError> {
+        let slug = slug.to_string();
+        self.db
+            .with_conn(move |conn| {
+                let game_id: i64 = conn.query_row(
+                    "SELECT id FROM library_games WHERE slug = ?1",
+                    [&slug],
+                    |row| row.get(0),
+                )?;
+                let existing = query_mods(conn, &slug)?;
+                let mut by_name: std::collections::HashMap<String, ModRecord> = existing
+                    .into_iter()
+                    .map(|record| (record.name.clone(), record))
+                    .collect();
+                let mut next_order = by_name
+                    .values()
+                    .map(|record| record.order)
+                    .max()
+                    .unwrap_or(-1)
+                    + 1;
+                let mut seen = HashSet::new();
+                for seed in seeds {
+                    if !seen.insert(seed.name.clone()) {
+                        continue;
+                    }
+                    if let Some(record) = by_name.remove(&seed.name) {
+                        conn.execute(
+                            "UPDATE mods SET path = ?2, enabled = ?3 WHERE id = ?1",
+                            params![record.id, path_to_string(&seed.path), seed.enabled as i64],
+                        )?;
+                    } else {
+                        conn.execute(
+                            "INSERT INTO mods (game_id, name, path, enabled, ord) \
+                             VALUES (?1, ?2, ?3, ?4, ?5)",
+                            params![
+                                game_id,
+                                seed.name,
+                                path_to_string(&seed.path),
+                                seed.enabled as i64,
+                                next_order
+                            ],
+                        )?;
+                        next_order += 1;
+                    }
+                }
+                for stale in by_name.values() {
+                    conn.execute("DELETE FROM mods WHERE id = ?1", [stale.id])?;
+                }
+                query_mods(conn, &slug)
+            })
+            .await
+    }
+
+    /// Updates the path and enabled flag after a mod was moved.
+    pub async fn set_mod_state(
+        &self,
+        slug: &str,
+        name: &str,
+        path: &Path,
+        enabled: bool,
+    ) -> Result<(), DbError> {
+        let slug = slug.to_string();
+        let name = name.to_string();
+        let path = path_to_string(path);
+        self.db
+            .with_conn(move |conn| {
+                conn.execute(
+                    "UPDATE mods SET path = ?3, enabled = ?4 \
+                     WHERE game_id = (SELECT id FROM library_games WHERE slug = ?1) \
+                       AND name = ?2",
+                    params![slug, name, path, enabled as i64],
+                )?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// Persists a user-defined order. Names not listed keep their previous
+    /// relative order after the listed ones.
+    pub async fn set_mod_order(&self, slug: &str, names: Vec<String>) -> Result<(), DbError> {
+        let slug = slug.to_string();
+        self.db
+            .with_conn(move |conn| {
+                let game_id: i64 = conn.query_row(
+                    "SELECT id FROM library_games WHERE slug = ?1",
+                    [&slug],
+                    |row| row.get(0),
+                )?;
+                for (index, name) in names.iter().enumerate() {
+                    conn.execute(
+                        "UPDATE mods SET ord = ?3 WHERE game_id = ?1 AND name = ?2",
+                        params![game_id, name, index as i64],
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+    }
+
     /// Records a launch timestamp and adds elapsed playtime.
     pub async fn record_playtime(&self, slug: &str, seconds: u64) -> Result<(), DbError> {
         let slug = slug.to_string();
@@ -275,6 +408,26 @@ fn query_game(conn: &rusqlite::Connection, slug: &str) -> rusqlite::Result<Libra
         [slug],
         row_to_game,
     )
+}
+
+fn query_mods(conn: &rusqlite::Connection, slug: &str) -> rusqlite::Result<Vec<ModRecord>> {
+    let mut statement = conn.prepare(
+        "SELECT m.id, m.game_id, m.name, m.path, m.enabled, m.ord \
+         FROM mods m JOIN library_games g ON g.id = m.game_id \
+         WHERE g.slug = ?1 ORDER BY m.ord, m.name COLLATE NOCASE",
+    )?;
+    let rows = statement.query_map([slug], |row| {
+        let enabled: i64 = row.get(4)?;
+        Ok(ModRecord {
+            id: row.get(0)?,
+            game_id: row.get(1)?,
+            name: row.get(2)?,
+            path: PathBuf::from(row.get::<_, String>(3)?),
+            enabled: enabled != 0,
+            order: row.get(5)?,
+        })
+    })?;
+    rows.collect()
 }
 
 fn row_to_game(row: &Row<'_>) -> rusqlite::Result<LibraryGame> {

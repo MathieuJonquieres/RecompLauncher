@@ -73,6 +73,25 @@ launcher et **conserve** `userdata/` et `mods/` : ces dossiers peuvent contenir 
 créées par l'utilisateur ou par le jeu. Les dumps personnels ne sont jamais copiés,
 téléversés ni supprimés.
 
+## 2026-10-21 — Lancement et mods (M5)
+
+Le lancement utilise `std::process::Command` avec un exécutable résolu depuis
+`library_games` et `LaunchSpec`, sans passer par un shell. Le chemin déclaré est validé
+par `archive::SafeRelPath` avant d'être joint au dossier d'installation. Le PID est
+conservé et le temps de jeu est enregistré via `Library::record_playtime` lorsque le
+processus se termine. Les jeux externes utilisent l'exécutable/arguments/dossier de
+travail stockés, jamais un contenu de jeu copié.
+
+Les mods activés vivent dans `games/<slug>/<dir_name>/` et les désactivés dans
+`games/<slug>/<dir_name>.disabled/`. Le scan ne suit pas les liens symboliques et ne
+retient que les fichiers dont l'extension correspond à `format_hint` (les dossiers sont
+acceptés). L'import ne conserve que le dernier composant du chemin source et refuse les
+liens. La stratégie `native_dir` recopie uniquement les mods activés dans un miroir du
+dossier de travail du jeu (manifeste interne pour retirer les anciens miroirs) ; elle ne
+touche jamais un dossier choisi manuellement. La stratégie `args` remplace `{path}` et
+`{name}` jeton par jeton, ce qui préserve les chemins contenant des espaces. Le launcher
+n'exécute jamais le contenu d'un mod.
+
 ## 2026-10-21 — Jeu externe
 
 Le type de bibliothèque `external` stocke exécutable + arguments + dossier de travail, sans

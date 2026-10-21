@@ -9,6 +9,7 @@ use tokio::runtime::Runtime;
 use crate::backend_bridge::{BackendBridge, Command, Event};
 use crate::views::catalog::CatalogView;
 use crate::views::library::LibraryView;
+use crate::views::ModsUiState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Page {
@@ -98,7 +99,10 @@ impl LauncherApp {
     fn pump_events(&mut self) {
         for event in self.bridge.drain() {
             match event {
-                Event::Catalog(snapshot) => self.catalog.apply_snapshot(snapshot),
+                Event::Catalog(snapshot) => {
+                    self.library.apply_catalog(&snapshot.entries);
+                    self.catalog.apply_snapshot(snapshot);
+                }
                 Event::CatalogRefreshing => self.catalog.refreshing = true,
                 Event::Library(games) => {
                     self.catalog.apply_library(games.clone());
@@ -163,6 +167,52 @@ impl LauncherApp {
                 }
                 Event::Uninstalled { slug } => {
                     self.set_status(format!("{slug} a été retiré de la bibliothèque."), false);
+                }
+                Event::GameStarted {
+                    slug,
+                    pid,
+                    executable,
+                } => {
+                    self.set_status(
+                        format!("{slug} lancé (PID {pid}) depuis {}", executable.display()),
+                        false,
+                    );
+                }
+                Event::GameExited {
+                    slug,
+                    seconds,
+                    code,
+                    success,
+                } => {
+                    self.set_status(
+                        format!(
+                            "{slug} terminé après {seconds}s (code {}, {})",
+                            code.map_or_else(|| "inconnu".to_string(), |code| code.to_string()),
+                            if success { "succès" } else { "échec" }
+                        ),
+                        !success,
+                    );
+                    self.bridge.send(Command::RefreshLibrary);
+                }
+                Event::Mods { slug, snapshot } => {
+                    let state = ModsUiState::from_snapshot(snapshot);
+                    self.catalog.apply_mods(&slug, state.clone());
+                    self.library.apply_mods(&slug, state);
+                }
+                Event::ModsDirReady { slug, path } => {
+                    self.set_status(
+                        format!("Dossier mods prêt pour {slug} : {}", path.display()),
+                        false,
+                    );
+                }
+                Event::ModsImported { slug, count } => {
+                    self.set_status(format!("{count} mod(s) importé(s) pour {slug}."), false);
+                }
+                Event::ModsFailed { slug, message } => {
+                    self.catalog.mods_failed(&slug, message.clone());
+                    self.library.mods_failed(&slug, message.clone());
+                    tracing::error!(%slug, %message, "mods action failed");
+                    self.set_status(message, true);
                 }
                 Event::Info(message) => self.set_status(message, false),
                 Event::Error(message) => {

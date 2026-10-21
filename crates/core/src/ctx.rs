@@ -14,8 +14,10 @@ use crate::catalog::service::{CatalogService, CatalogSnapshot};
 use crate::catalog::CatalogProvider;
 use crate::db::{Db, DbError};
 use crate::error::Result;
+use crate::launch::GameLauncher;
 use crate::library::install::InstallManager;
 use crate::library::Library;
+use crate::mods::ModManager;
 use crate::net::http_client::{HttpClient, HttpConfig};
 use crate::paths::AppPaths;
 use crate::settings::{
@@ -31,6 +33,8 @@ pub struct AppContext {
     catalog: CatalogService,
     library: Library,
     installer: InstallManager,
+    mods: ModManager,
+    launcher: GameLauncher,
 }
 
 impl AppContext {
@@ -82,6 +86,8 @@ impl AppContext {
 
         let library = Library::new(db.clone());
         let installer = InstallManager::new(paths.clone(), http.clone(), library.clone());
+        let mods = ModManager::new(paths.clone(), library.clone());
+        let launcher = GameLauncher::new(library.clone(), mods.clone());
 
         Ok(Self {
             paths,
@@ -91,6 +97,8 @@ impl AppContext {
             catalog,
             library,
             installer,
+            mods,
+            launcher,
         })
     }
 
@@ -120,6 +128,14 @@ impl AppContext {
 
     pub fn installer(&self) -> &InstallManager {
         &self.installer
+    }
+
+    pub fn mods(&self) -> &ModManager {
+        &self.mods
+    }
+
+    pub fn launcher(&self) -> &GameLauncher {
+        &self.launcher
     }
 
     pub async fn load_cached_catalog(&self) -> std::result::Result<CatalogSnapshot, DbError> {

@@ -351,6 +351,16 @@ pub enum ModStrategy {
     None,
 }
 
+impl ModStrategy {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::NativeDir => "Dossier natif",
+            Self::Args => "Arguments de lancement",
+            Self::None => "Non supportés",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModsSpec {
     #[serde(default)]
