@@ -14,6 +14,8 @@ use crate::catalog::service::{CatalogService, CatalogSnapshot};
 use crate::catalog::CatalogProvider;
 use crate::db::{Db, DbError};
 use crate::error::Result;
+use crate::library::install::InstallManager;
+use crate::library::Library;
 use crate::net::http_client::{HttpClient, HttpConfig};
 use crate::paths::AppPaths;
 use crate::settings::{
@@ -27,6 +29,8 @@ pub struct AppContext {
     settings: Settings,
     http: HttpClient,
     catalog: CatalogService,
+    library: Library,
+    installer: InstallManager,
 }
 
 impl AppContext {
@@ -76,12 +80,17 @@ impl AppContext {
                 as Arc<dyn CatalogProvider>);
         }
 
+        let library = Library::new(db.clone());
+        let installer = InstallManager::new(paths.clone(), http.clone(), library.clone());
+
         Ok(Self {
             paths,
             db,
             settings,
             http,
             catalog,
+            library,
+            installer,
         })
     }
 
@@ -103,6 +112,14 @@ impl AppContext {
 
     pub fn catalog(&self) -> &CatalogService {
         &self.catalog
+    }
+
+    pub fn library(&self) -> &Library {
+        &self.library
+    }
+
+    pub fn installer(&self) -> &InstallManager {
+        &self.installer
     }
 
     pub async fn load_cached_catalog(&self) -> std::result::Result<CatalogSnapshot, DbError> {

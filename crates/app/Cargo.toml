@@ -16,5 +16,7 @@ eframe = "0.31"
 egui_extras = "0.31"
 opener.workspace = true
 recomp-core = { path = "../core" }
+rfd.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 tracing.workspace = true

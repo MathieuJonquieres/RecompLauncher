@@ -10,10 +10,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod archive;
 pub mod catalog;
 pub mod ctx;
 pub mod db;
 pub mod error;
+pub mod hash;
+pub mod library;
 pub mod logging;
 pub mod net;
 pub mod paths;

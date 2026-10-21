@@ -200,6 +200,12 @@ impl HttpClient {
         Self::new(HttpConfig::default(), std::iter::empty())
     }
 
+    /// Internal access for the streaming downloader. Kept crate-private so the
+    /// allowlist/redirect policy cannot be bypassed by callers.
+    pub(crate) fn raw_client(&self) -> &Client {
+        &self.inner.client
+    }
+
     /// Test constructor: allows plain HTTP on loopback only.
     pub fn for_tests(extra_hosts: impl IntoIterator<Item = String>) -> Result<Self, HttpError> {
         let config = HttpConfig {

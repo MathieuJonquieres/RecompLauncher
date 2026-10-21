@@ -44,6 +44,35 @@ l'interdiction de bloquer la boucle UI. `rusqlite_migration` gère les migration
 Les textes UI passent par `fluent-templates` (FR par défaut, EN fourni). Les libellés de
 données (titres de jeux, plateformes) ne sont pas traduits.
 
+## 2026-10-21 — Extraction d'archives sécurisée (M4)
+
+Chaque entrée passe par `archive::SafeRelPath`, qui normalise les séparateurs et refuse
+`..`, les chemins absolus, les préfixes de lecteur Windows, les noms réservés (`CON`,
+`NUL`, `COM1`…), les caractères interdits, les composants finissant par un point/espace et
+les doublons. Les liens symboliques/physiques sont refusés (tar, mode Unix ZIP, anti-item
+7z). Les limites par défaut sont 8 Gio au total, 4 Gio par fichier, 20 000 entrées et un
+ratio de compression de 250:1. L'extraction se fait dans un dossier temporaire vide, jamais
+directement dans le dossier final.
+
+## 2026-10-21 — Téléchargement et installation atomique (M4)
+
+Le téléchargement écrit dans `<fichier>.part`, reprend via `Range` après une coupure,
+expose la progression et peut être annulé avec `CancellationToken`. Le SHA-256 publié
+(manifeste ou digest GitHub) est vérifié avant de renommer `.part` vers le fichier final.
+L'installation extrait dans `tempfile`, localise l'exécutable déclaré par le manifeste,
+puis déplace le dossier par `rename` atomique. L'ancienne version est conservée jusqu'à
+l'écriture réussie en base ; en cas d'échec, elle est restaurée et la nouvelle copie est
+supprimée.
+
+## 2026-10-21 — Désinstallation et réparation (M4)
+
+« Réparer » vérifie d'abord le dossier, l'exécutable et le fichier utilisateur ; une
+installation saine n'est pas retéléchargée. Sinon, la dernière release est réinstallée avec
+le pipeline normal. La désinstallation supprime uniquement les fichiers gérés par le
+launcher et **conserve** `userdata/` et `mods/` : ces dossiers peuvent contenir des données
+créées par l'utilisateur ou par le jeu. Les dumps personnels ne sont jamais copiés,
+téléversés ni supprimés.
+
 ## 2026-10-21 — Jeu externe
 
 Le type de bibliothèque `external` stocke exécutable + arguments + dossier de travail, sans

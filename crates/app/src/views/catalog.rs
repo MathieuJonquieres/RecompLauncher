@@ -3,16 +3,18 @@
 //! Pure presentation: filtering happens on an in-memory slice, every action
 //! that touches the network/disk is sent as a `Command`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use eframe::egui::{self, Align, Color32, FontId, Layout, RichText, Sense, Vec2};
 use recomp_core::catalog::filter::{CatalogFilter, CatalogSort};
 use recomp_core::catalog::model::{GameEntry, GameKind, GameStatus, Os};
 use recomp_core::catalog::service::CatalogSnapshot;
 use recomp_core::db::now_unix;
+use recomp_core::library::{InstallSource, LibraryGame};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::backend_bridge::Command;
+use crate::views::InstallProgress;
 
 const CARD_HEIGHT: f32 = 164.0;
 const CARD_MIN_WIDTH: f32 = 260.0;
@@ -26,6 +28,9 @@ pub struct CatalogView {
     pub refreshing: bool,
     pub last_updated: Option<i64>,
     pub errors: Vec<String>,
+    pub library: Vec<LibraryGame>,
+    pub installs: HashMap<String, InstallProgress>,
+    pending_uninstall: Option<String>,
 }
 
 impl CatalogView {
@@ -40,6 +45,28 @@ impl CatalogView {
                 self.selected = None;
             }
         }
+    }
+
+    pub fn apply_library(&mut self, games: Vec<LibraryGame>) {
+        self.library = games;
+    }
+
+    pub fn install_started(&mut self, slug: &str) {
+        self.installs
+            .insert(slug.to_string(), InstallProgress::default());
+    }
+
+    pub fn install_progress(&mut self, slug: &str, downloaded: u64, total: Option<u64>) {
+        self.installs
+            .insert(slug.to_string(), InstallProgress { downloaded, total });
+    }
+
+    pub fn install_finished(&mut self, slug: &str) {
+        self.installs.remove(slug);
+    }
+
+    fn installed(&self, slug: &str) -> Option<&LibraryGame> {
+        self.library.iter().find(|game| game.slug == slug)
     }
 
     pub fn show_central(&mut self, ui: &mut egui::Ui, commands: &UnboundedSender<Command>) {
@@ -226,6 +253,10 @@ impl CatalogView {
             return;
         };
 
+        let installed = self.installed(entry.slug.as_str()).cloned();
+        let progress = self.installs.get(entry.slug.as_str()).copied();
+        let compatible = entry.supports_os(Os::current());
+        let mut request_uninstall = None;
         let mut open = true;
         egui::SidePanel::right("game-detail")
             .resizable(true)
@@ -360,6 +391,135 @@ impl CatalogView {
                     }
 
                     ui.add_space(10.0);
+                    ui.separator();
+                    ui.strong("Installation");
+                    if let Some(progress) = progress {
+                        let fraction = progress.fraction();
+                        match fraction {
+                            Some(fraction) => {
+                                ui.add(
+                                    egui::ProgressBar::new(fraction)
+                                        .show_percentage()
+                                        .desired_width(ui.available_width()),
+                                );
+                            }
+                            None => {
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    ui.label(format!(
+                                        "{} téléchargés",
+                                        format_bytes(progress.downloaded)
+                                    ));
+                                });
+                            }
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("Téléchargement et installation en cours…")
+                                    .small()
+                                    .weak(),
+                            );
+                            if ui.button("Annuler").clicked() {
+                                let _ = commands.send(Command::CancelInstall {
+                                    slug: entry.slug.as_str().to_string(),
+                                });
+                            }
+                        });
+                    } else if let Some(game) = &installed {
+                        ui.label(
+                            RichText::new(format!(
+                                "{} · version {}",
+                                game.source.label(),
+                                game.version.as_deref().unwrap_or("inconnue")
+                            ))
+                            .color(Color32::from_rgb(120, 200, 140)),
+                        );
+                        if let Some(path) = &game.install_path {
+                            ui.label(
+                                RichText::new(path.display().to_string())
+                                    .small()
+                                    .weak()
+                                    .monospace(),
+                            );
+                        }
+                        let user_file = game.user_file.as_ref();
+                        if entry.user_files.as_ref().is_some_and(|files| files.required) {
+                            match user_file {
+                                Some(path) => ui.label(
+                                    RichText::new(format!(
+                                        "Fichier utilisateur : {}",
+                                        path.display()
+                                    ))
+                                    .small()
+                                    .color(Color32::from_rgb(120, 200, 140)),
+                                ),
+                                None => ui.label(
+                                    RichText::new(
+                                        "Fichier utilisateur requis : sélectionnez votre dump.",
+                                    )
+                                    .small()
+                                    .color(Color32::from_rgb(255, 190, 90)),
+                                ),
+                            };
+                        }
+                        ui.horizontal_wrapped(|ui| {
+                            if entry.user_files.is_some()
+                                && ui.button("Choisir mon fichier").clicked()
+                            {
+                                let _ = commands.send(Command::SelectUserFile {
+                                    slug: entry.slug.as_str().to_string(),
+                                });
+                            }
+                            if matches!(game.source, InstallSource::Managed)
+                                && ui.button("Réparer").clicked()
+                            {
+                                let _ = commands.send(Command::Repair {
+                                    slug: entry.slug.as_str().to_string(),
+                                });
+                            }
+                            if matches!(game.source, InstallSource::Managed)
+                                && ui.button("Réinstaller").clicked()
+                            {
+                                let _ = commands.send(Command::Install {
+                                    slug: entry.slug.as_str().to_string(),
+                                });
+                            }
+                            if ui.button("Désinstaller").clicked() {
+                                request_uninstall = Some(entry.slug.as_str().to_string());
+                            }
+                        });
+                    } else if compatible {
+                        if ui
+                            .add(
+                                egui::Button::new("Installer")
+                                    .min_size(Vec2::new(150.0, 30.0)),
+                            )
+                            .clicked()
+                        {
+                            let _ = commands.send(Command::Install {
+                                slug: entry.slug.as_str().to_string(),
+                            });
+                        }
+                        ui.label(
+                            RichText::new(
+                                "Le binaire officiel sera téléchargé depuis GitHub Releases, \
+                                 vérifié puis installé dans le dossier de données du launcher.",
+                            )
+                            .small()
+                            .weak(),
+                        );
+                    } else {
+                        ui.label(
+                            RichText::new(
+                                entry
+                                    .incompatible_reason(Os::current())
+                                    .unwrap_or("Aucun binaire compatible avec ce système."),
+                            )
+                            .color(Color32::from_rgb(220, 130, 130)),
+                        );
+                    }
+
+                    ui.add_space(10.0);
                     ui.strong("Mods");
                     if entry.mods.supported {
                         ui.label(format!(
@@ -386,8 +546,8 @@ impl CatalogView {
                     ui.separator();
                     ui.label(
                         RichText::new(
-                            "L'installation et la gestion de bibliothèque arrivent au jalon M4. \
-                             Aucun binaire n'est téléchargé depuis cette fiche pour l'instant.",
+                            "Aucun contenu de jeu n'est fourni par le launcher. \
+                             Les binaires proviennent uniquement des releases officielles du projet.",
                         )
                         .small()
                         .weak(),
@@ -395,8 +555,57 @@ impl CatalogView {
                 });
             });
 
+        if let Some(slug) = request_uninstall {
+            self.pending_uninstall = Some(slug);
+        }
+        self.uninstall_dialog(ctx, commands);
         if !open {
             self.selected = None;
+        }
+    }
+
+    fn uninstall_dialog(&mut self, ctx: &egui::Context, commands: &UnboundedSender<Command>) {
+        let Some(slug) = self.pending_uninstall.clone() else {
+            return;
+        };
+        let title = self
+            .library
+            .iter()
+            .find(|game| game.slug == slug)
+            .map(|game| game.title.clone())
+            .unwrap_or_else(|| slug.clone());
+        let mut open = true;
+        let mut confirm = false;
+        let mut cancel = false;
+        egui::Window::new("Confirmer la désinstallation")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(format!("Supprimer « {title} » de la bibliothèque ?"));
+                ui.label(
+                    RichText::new(
+                        "Les fichiers installés par le launcher seront supprimés. \
+                         Les dossiers userdata/ et mods/ seront conservés, ainsi que vos dumps personnels.",
+                    )
+                    .small()
+                    .weak(),
+                );
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Supprimer").clicked() {
+                        confirm = true;
+                    }
+                    if ui.button("Annuler").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if confirm {
+            let _ = commands.send(Command::Uninstall { slug });
+            self.pending_uninstall = None;
+        } else if cancel || !open {
+            self.pending_uninstall = None;
         }
     }
 }
@@ -544,6 +753,22 @@ fn badge(ui: &mut egui::Ui, text: &str, color: Color32) {
         .show(ui, |ui| {
             ui.label(RichText::new(text).small().color(Color32::WHITE));
         });
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+    let bytes = bytes as f64;
+    if bytes >= GIB {
+        format!("{:.1} Gio", bytes / GIB)
+    } else if bytes >= MIB {
+        format!("{:.1} Mio", bytes / MIB)
+    } else if bytes >= KIB {
+        format!("{:.1} Kio", bytes / KIB)
+    } else {
+        format!("{bytes:.0} o")
+    }
 }
 
 fn format_age(timestamp: Option<i64>) -> String {

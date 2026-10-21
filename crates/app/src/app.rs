@@ -8,6 +8,7 @@ use tokio::runtime::Runtime;
 
 use crate::backend_bridge::{BackendBridge, Command, Event};
 use crate::views::catalog::CatalogView;
+use crate::views::library::LibraryView;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Page {
@@ -53,8 +54,10 @@ pub struct LauncherApp {
     paths: AppPaths,
     page: Page,
     catalog: CatalogView,
+    library: LibraryView,
     dark_theme: bool,
     status: Option<String>,
+    status_is_error: bool,
 }
 
 impl LauncherApp {
@@ -80,9 +83,16 @@ impl LauncherApp {
             paths,
             page: Page::Catalog,
             catalog: CatalogView::default(),
+            library: LibraryView::default(),
             dark_theme: true,
             status: None,
+            status_is_error: false,
         }
+    }
+
+    fn set_status(&mut self, message: impl Into<String>, is_error: bool) {
+        self.status = Some(message.into());
+        self.status_is_error = is_error;
     }
 
     fn pump_events(&mut self) {
@@ -90,9 +100,74 @@ impl LauncherApp {
             match event {
                 Event::Catalog(snapshot) => self.catalog.apply_snapshot(snapshot),
                 Event::CatalogRefreshing => self.catalog.refreshing = true,
+                Event::Library(games) => {
+                    self.catalog.apply_library(games.clone());
+                    self.library.apply_library(games);
+                }
+                Event::InstallStarted { slug, repaired } => {
+                    self.catalog.install_started(&slug);
+                    self.library.install_started(&slug);
+                    self.set_status(
+                        format!(
+                            "{} de {slug}…",
+                            if repaired {
+                                "Réparation"
+                            } else {
+                                "Installation"
+                            }
+                        ),
+                        false,
+                    );
+                }
+                Event::InstallProgress {
+                    slug,
+                    downloaded,
+                    total,
+                } => {
+                    self.catalog.install_progress(&slug, downloaded, total);
+                    self.library.install_progress(&slug, downloaded, total);
+                }
+                Event::InstallFinished {
+                    slug,
+                    version,
+                    user_file_required,
+                    repaired,
+                } => {
+                    self.catalog.install_finished(&slug);
+                    self.library.install_finished(&slug);
+                    let suffix = if user_file_required {
+                        " — fichier utilisateur requis"
+                    } else {
+                        ""
+                    };
+                    self.set_status(
+                        format!(
+                            "{} terminée : {slug} ({version}){suffix}",
+                            if repaired {
+                                "Réparation"
+                            } else {
+                                "Installation"
+                            }
+                        ),
+                        false,
+                    );
+                }
+                Event::InstallFailed { slug, message } => {
+                    self.catalog.install_finished(&slug);
+                    self.library.install_finished(&slug);
+                    tracing::error!(%slug, %message, "install failed");
+                    self.set_status(message, true);
+                }
+                Event::UserFileVerified { slug, label } => {
+                    self.set_status(format!("Fichier vérifié pour {slug} : {label}"), false);
+                }
+                Event::Uninstalled { slug } => {
+                    self.set_status(format!("{slug} a été retiré de la bibliothèque."), false);
+                }
+                Event::Info(message) => self.set_status(message, false),
                 Event::Error(message) => {
                     tracing::error!(%message, "backend error");
-                    self.status = Some(message);
+                    self.set_status(message, true);
                 }
             }
         }
@@ -113,6 +188,9 @@ impl LauncherApp {
             let label = match page {
                 Page::Catalog if !self.catalog.entries.is_empty() => {
                     format!("{} ({})", page.label(), self.catalog.entries.len())
+                }
+                Page::Library if !self.library.games.is_empty() => {
+                    format!("{} ({})", page.label(), self.library.games.len())
                 }
                 _ => page.label().to_string(),
             };
@@ -215,11 +293,13 @@ impl eframe::App for LauncherApp {
                 ui.label(self.page.label());
                 if let Some(status) = &self.status {
                     ui.separator();
-                    ui.label(
-                        eframe::egui::RichText::new(status)
-                            .small()
-                            .color(eframe::egui::Color32::LIGHT_RED),
-                    );
+                    ui.label(eframe::egui::RichText::new(status).small().color(
+                        if self.status_is_error {
+                            eframe::egui::Color32::LIGHT_RED
+                        } else {
+                            eframe::egui::Color32::from_rgb(140, 210, 160)
+                        },
+                    ));
                 }
             });
         });
@@ -235,6 +315,7 @@ impl eframe::App for LauncherApp {
 
         eframe::egui::CentralPanel::default().show(ctx, |ui| match self.page {
             Page::Catalog => self.catalog.show_central(ui, self.bridge.sender()),
+            Page::Library => self.library.show_central(ui, self.bridge.sender()),
             _ => self.placeholder(ui),
         });
 

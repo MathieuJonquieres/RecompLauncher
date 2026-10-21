@@ -238,7 +238,9 @@ dependencies = [
  "egui_extras",
  "opener",
  "recomp-core",
+ "rfd",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
@@ -3938,6 +3940,7 @@ dependencies = [
  "async-trait",
  "crc32fast",
  "directories",
+ "flate2",
  "fluent-templates",
  "futures",
  "insta",

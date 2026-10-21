@@ -82,12 +82,13 @@ impl fmt::Display for Slug {
 }
 
 /// Hash algorithms accepted for user-provided files.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum HashAlgo {
     Sha1,
     Sha256,
+    Md5,
     Crc32,
 }
 
@@ -96,6 +97,7 @@ impl HashAlgo {
         match self {
             Self::Sha1 => 40,
             Self::Sha256 => 64,
+            Self::Md5 => 32,
             Self::Crc32 => 8,
         }
     }
@@ -104,6 +106,7 @@ impl HashAlgo {
         match self {
             Self::Sha1 => "sha1",
             Self::Sha256 => "sha256",
+            Self::Md5 => "md5",
             Self::Crc32 => "crc32",
         }
     }
