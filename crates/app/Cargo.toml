@@ -1,0 +1,20 @@
+[package]
+name = "app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "RecompLauncher eframe desktop application"
+
+[[bin]]
+name = "recomp-launcher"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+eframe = "0.31"
+egui_extras = "0.31"
+opener.workspace = true
+recomp-core = { path = "../core" }
+tokio.workspace = true
+tracing.workspace = true

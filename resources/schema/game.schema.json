@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://recomplancher.local/schema/game.schema.json",
+  "title": "RecompLauncher game manifest",
+  "type": "object",
+  "required": ["schema", "slug", "title", "original_platform", "kind", "status", "project", "launch"],
+  "additionalProperties": true,
+  "properties": {
+    "schema": { "const": 1 },
+    "slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$", "maxLength": 80 },
+    "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "original_platform": { "type": "string", "minLength": 1, "maxLength": 40 },
+    "kind": { "enum": ["recomp", "decomp", "native"] },
+    "status": { "enum": ["playable", "beta", "wip"] },
+    "description": { "type": "string", "maxLength": 4000 },
+    "project": {
+      "type": "object",
+      "required": ["name", "repo"],
+      "additionalProperties": true,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "repo": { "type": "string", "pattern": "^https://" },
+        "license": { "type": "string" }
+      }
+    },
+    "releases": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "source": { "enum": ["github", "manual", "none"] },
+        "assets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["os", "pattern"],
+            "additionalProperties": true,
+            "properties": {
+              "os": { "enum": ["windows", "linux", "macos"] },
+              "arch": { "enum": ["x86_64", "arm64", "any"] },
+              "pattern": { "type": "string", "minLength": 1 },
+              "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" }
+            }
+          }
+        }
+      }
+    },
+    "user_files": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "required": { "type": "boolean" },
+        "description": { "type": "string" },
+        "accepted_hashes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["algo", "value"],
+            "additionalProperties": true,
+            "properties": {
+              "algo": { "enum": ["sha1", "sha256", "crc32"] },
+              "value": { "type": "string", "pattern": "^[a-fA-F0-9]+$" },
+              "label": { "type": "string" }
+            }
+          }
+        },
+        "prompt_ext": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^\\.[A-Za-z0-9]+$" }
+        }
+      }
+    },
+    "launch": {
+      "type": "object",
+      "required": ["exe"],
+      "additionalProperties": true,
+      "properties": {
+        "exe": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        },
+        "args": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "mods": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "supported": { "type": "boolean" },
+        "dir_name": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+        "format_hint": { "type": "string" },
+        "strategy": { "enum": ["native_dir", "args", "none"] },
+        "args_template": { "type": "string" },
+        "docs_url": { "type": "string", "pattern": "^https://" }
+      }
+    },
+    "online": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "supported": { "type": "boolean" },
+        "modes": {
+          "type": "array",
+          "items": { "enum": ["local_server", "public_server", "p2p"] }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "wikipedia_title": { "type": ["string", "null"] },
+        "igdb_id": { "type": ["integer", "null"] }
+      }
+    }
+  }
+}

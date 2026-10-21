@@ -1,0 +1,12 @@
+---
+source: crates/core/src/catalog/manifest.rs
+expression: slugs
+---
+[
+    "zelda64-recomp",
+    "banjo-recomp",
+    "ship-of-harkinian",
+    "2ship2harkinian",
+    "devilutionx",
+    "openrct2",
+]

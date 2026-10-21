@@ -1,0 +1,51 @@
+# RecompLauncher — décisions d'architecture et arbitrages
+
+Ce fichier journalise chaque décision non triviale, avec sa date et sa justification.
+Le spec (`AGENT_SPEC_recomp_launcher_rust.md`) reste la source de vérité.
+
+## 2026-10-21 — Cible de compilation locale Windows GNU
+
+La machine de développement ne dispose ni de Visual Studio Build Tools ni d'un linker MSVC.
+Le toolchain stable `x86_64-pc-windows-gnu` est utilisé localement (MinGW 13.1 fourni avec Qt).
+Le code reste portable MSVC : la CI GitHub Actions cible `windows-latest` (MSVC), `ubuntu-latest`
+et `macos-latest`. Aucune API spécifique à un linker n'est utilisée.
+
+## 2026-10-21 — Absence de source « recomp » vérifiable
+
+Le brief mentionne « le site recomp » sans URL. Recherche effectuée le 2026-10-21 :
+pas d'API JSON officielle ni de flux RSS/sitemap identifié de façon certaine.
+Décision : implémenter `ManifestProvider` (fallback garanti) avec `catalog.seed.json` embarqué,
+et laisser `RecompSiteProvider` désactivé tant qu'une URL réelle n'est pas fournie. Le provider
+HTML existe derrière un flag de configuration et ne scrape aucun contenu protégé par login.
+Détail : `docs/DATA_SOURCES.md`.
+
+## 2026-10-21 — Validation en deux étapes
+
+1. Validation JSON Schema Draft 2020-12 (`jsonschema`) sur chaque entrée.
+2. Désérialisation typée (`serde`) vers `GameEntry` avec enums et newtypes.
+
+Les champs inconnus sont ignorés (pas de `deny_unknown_fields`). Une entrée invalide est
+loggée (`tracing::warn!`) puis ignorée : elle ne fait jamais échouer tout le catalogue.
+
+## 2026-10-21 — Accès SQLite
+
+`rusqlite` (bundled) est accédé via un unique `Connection` protégé par `std::sync::Mutex` et
+toutes les opérations passent par `tokio::task::spawn_blocking`. Le mutex n'est jamais tenu
+à travers un `.await`. Ce choix évite un thread dédié supplémentaire tout en respectant
+l'interdiction de bloquer la boucle UI. `rusqlite_migration` gère les migrations embarquées.
+
+## 2026-10-21 — Pas de `unwrap()` hors tests
+
+`#![forbid(unsafe_code)]` dans tous les crates. Les erreurs sont typées (`thiserror`) dans
+`core`, `anyhow` uniquement aux frontières du binaire.
+
+## 2026-10-21 — i18n Fluent
+
+Les textes UI passent par `fluent-templates` (FR par défaut, EN fourni). Les libellés de
+données (titres de jeux, plateformes) ne sont pas traduits.
+
+## 2026-10-21 — Jeu externe
+
+Le type de bibliothèque `external` stocke exécutable + arguments + dossier de travail, sans
+aucune connaissance du jeu. Il sert aux titres sans recomp publique (Smash Ultimate,
+Mario Kart 8 Deluxe) : le launcher ne fournit ni émulateur, ni clé, ni firmware.

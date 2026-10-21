@@ -1,0 +1,17 @@
+[package]
+name = "recomp-testkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Shared fixtures and helpers for RecompLauncher tests"
+
+[lib]
+name = "recomp_testkit"
+path = "src/lib.rs"
+
+[dependencies]
+recomp-core = { path = "../core" }
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
