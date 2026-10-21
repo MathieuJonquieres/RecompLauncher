@@ -16,8 +16,8 @@ Paramètres).
   (100 core, 0 app, 0 testkit)
 - `cargo clippy --workspace --all-targets -- -D warnings` : **OK**
 - `cargo fmt --all -- --check` : **OK**
-- Dernier commit sain : `eaa272e` (M5 + docs)
-- Travail M6–M9 : commit final de cette session
+- Dernier commit sain : `21a4183` (M6–M9)
+- Travail non commité : aucun
 - Vérification manuelle : application démarrée en mode portable, page Paramètres
   fonctionnelle (langue FR/EN, thème, URLs, cache, export des logs, dossier de données),
   page Amis avec carnet local, page Bibliothèque avec jeu externe.
