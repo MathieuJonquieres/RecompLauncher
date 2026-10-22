@@ -237,6 +237,9 @@ mod tests {
     fn selects_asset_and_digest() {
         let mut entry = minimal_entry("test");
         entry.releases.assets[0].sha256 = None;
+        // The fixture targets x86_64; clear the arch so this assertion stays
+        // independent of the host running the test suite.
+        entry.releases.assets[0].arch = None;
         let release = GitHubRelease {
             tag_name: "v1.0.0".to_string(),
             name: "v1.0.0".to_string(),

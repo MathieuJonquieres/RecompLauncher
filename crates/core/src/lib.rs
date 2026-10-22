@@ -18,6 +18,7 @@ pub mod catalog;
 pub mod ctx;
 pub mod db;
 pub mod error;
+pub mod fs_usage;
 pub mod hash;
 pub mod i18n;
 pub mod launch;

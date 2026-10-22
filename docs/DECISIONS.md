@@ -138,11 +138,41 @@ dynamiques restent en français et seront migrés vers les mêmes clés. La page
 Paramètres expose langue, thème, proxy, URLs de manifeste/liste de serveurs, cache, export
 des logs et dossier de données. Le workflow `release.yml` construit des archives Windows,
 Linux et macOS sur tag `v*` ; les archives ne contiennent que le binaire et le README.
+La refonte UI (M10) remplace les vues localisées par des vues françaises dédiées ; le
+mécanisme Fluent du core reste intact mais n'est plus le chemin d'affichage principal.
 
-## 2026-10-21 — Limites assumées
+## 2026-10-21 — Refonte de l'interface egui (M10)
+
+Le binaire reste Rust + egui/eframe : aucune migration React/Tauri/webview. Le design
+1440×900 est implémenté avec une fenêtre sans décoration, une palette et des tokens
+sombre/clair, Inter (400/500/600/700) et Lucide embarqués. La navigation se limite à
+Catalogue, Bibliothèque et Paramètres, plus la fiche jeu et les modales d'installation
+et de désinstallation. Les pages Amis et le bloc compte/avatar sont retirés ; les
+commandes de jeu externe sont retirées de la surface de l'app.
+
+Les données affichées sont réelles : catalogue, bibliothèque, installs, releases,
+mods, serveurs et statistiques de stockage proviennent du core. Aucune jaquette, aucun
+emoji et aucun jeu de démonstration ne sont ajoutés. Les cartes dont l'OS courant n'est
+pas pris en charge sont voilées, mais restent sélectionnables pour consulter la fiche ;
+leurs boutons sont désactivés. Les squelettes de chargement apparaissent après 1 s et
+la vérification de fichiers de l'installation reste visible au moins 1,2 s.
+
+egui ne fournit pas de backdrop blur : le voile des modales est plus opaque pour
+compenser. Les vues de la refonte sont en français ; le sélecteur de langue affiche
+« Français » à titre informatif et l'i18n Fluent du core n'est pas modifiée. Le
+redimensionnement est géré par des poignées invisibles et la fenêtre reste utilisable
+à 1180×720, avec un catalogue à deux colonnes et un panneau de détail de 310 px.
+
+## 2026-10-21 — Limites assumées (mise à jour M10)
 
 - L'URL du site « recomp » reste inconnue : `RecompSiteProvider` n'est pas activé.
-- Les installations réelles depuis GitHub ne sont pas testées sur cette machine sans
-  réseau ; les tests utilisent wiremock et des archives générées.
-- La traduction complète des fiches détaillées est un travail de finition ; la
-  navigation, les listes, les Amis et les Paramètres sont déjà localisés FR/EN.
+- Le catalogue seed ne contient aucun build macOS sur cette machine : le parcours réel
+  d'installation complet n'a pas été exercé de bout en bout. Les tests core couvrent le
+  téléchargement, les hashes, la reprise, l'extraction, le rollback et la désinstallation
+  avec des archives générées ; les modales sont branchées sur les commandes réelles et
+  vérifiées visuellement.
+- Les clics synthétiques macOS n'atteignent pas la fenêtre malgré l'autorisation
+  d'événements ; les captures ont utilisé un harnais d'environnement temporaire, retiré
+  du code final.
+- Cinq avertissements `epaint::text::font` au démarrage (glyphe de remplacement absent
+  de Lucide) sont sans impact visuel.

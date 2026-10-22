@@ -2,8 +2,8 @@
 
 Launcher de bureau générique pour jeux **recompilés** et **décompilés** (Rust + egui/eframe).
 
-> **État du projet** : jalons M0 à M9 terminés (catalogue hors ligne, installation,
-> lancement, mods, fiche Wikipédia, serveurs/Amis, jeux externes, i18n FR/EN).
+> **État du projet** : jalons M0 à M10 terminés (catalogue hors ligne, installation,
+> lancement, mods, fiche Wikipédia, serveurs, refonte de l'interface egui).
 > Voir `PROGRESS.md` pour les preuves et `docs/DECISIONS.md` pour les arbitrages.
 
 ---
@@ -13,8 +13,8 @@ Launcher de bureau générique pour jeux **recompilés** et **décompilés** (Ru
 ### Mission
 
 Parcourir un catalogue de projets recomp/decomp, gérer une bibliothèque de jeux
-(installés, manuels ou externes), lancer les jeux avec leurs mods et consulter des
-serveurs multijoueurs — sans jamais distribuer de contenu de jeu.
+installés, lancer les jeux avec leurs mods et consulter des serveurs multijoueurs —
+sans jamais distribuer de contenu de jeu.
 
 ### Ce que le launcher ne fait **jamais**
 
@@ -30,15 +30,13 @@ serveurs multijoueurs — sans jamais distribuer de contenu de jeu.
 
 **Super Smash Bros. Ultimate** et **Mario Kart 8 Deluxe** n'ont, à notre
 connaissance (octobre 2026), **aucune recompilation/décompilation publique
-complète**. Ils n'apparaissent donc pas dans le catalogue par défaut. Le mécanisme
-générique **« Jeu externe »** permet de déclarer vous-même un exécutable que vous
-possédez déjà, sans que le launcher ne fournisse ou ne configure d'émulateur, de
-clé ou de firmware. Cette fonctionnalité est disponible dans la page Bibliothèque
-(bouton « Ajouter un jeu externe »).
+complète**. Ils n'apparaissent donc pas dans le catalogue par défaut. Le launcher ne
+fournit ni n'installe d'émulateur, de clé ou de firmware.
 
 ### Fonctionnalités
 
-- Catalogue complet virtualisé, filtres, recherche, tri, cache SQLite et mode hors ligne.
+- Catalogue complet, filtres (recherche, plateforme, statut), cache SQLite et mode
+  hors ligne.
 - Installation sécurisée depuis les releases officielles (hash, reprise, extraction
   contrôlée, rollback), réparation et désinstallation conservant `userdata/` et `mods/`.
 - Lancement des jeux avec prise en compte des mods (dossier canonique, activation,
@@ -47,12 +45,14 @@ clé ou de firmware. Cette fonctionnalité est disponible dans la page Biblioth�
   cache 30 jours, repli sur le manifeste si le réseau échoue).
 - Options en ligne **uniquement si le manifeste les déclare** : liste publique JSON,
   découverte mDNS LAN, ajout manuel `host:port`, ping TCP (timeout 2 s, 16 max en
-  parallèle) et connexion via `join_template`.
-- Page Amis avec carnet **entièrement local** (aucun compte, aucun envoi de données).
-- Jeux externes et adaptateurs par slug (`GameAdapter`/`AdapterRegistry`).
-- Interface FR/EN (Fluent) pour la navigation, le catalogue, la bibliothèque, les amis
-  et les paramètres ; les fiches détaillées gardent encore des libellés français.
-- Thème clair/sombre, proxy, cache, export des logs.
+  parallèle) et connexion via `join_template`, dans l'onglet « En ligne » de la fiche.
+- Interface française repensée : navigation **Catalogue / Bibliothèque / Paramètres**,
+  fiche jeu à onglets, fenêtre sans décoration système, icônes Lucide et police Inter.
+- Thème sombre par défaut et thème clair, dimensionné pour 1440×900 (minimum 1180×720,
+  catalogue à deux colonnes avec panneau de détail de 310 px en fenêtre étroite).
+- Installation et désinstallation guidées avec progression réelle, vérification de
+  hash et contrôle du fichier utilisateur ; paramètres de stockage, proxy, cache et
+  export des logs.
 
 ### Téléchargements
 
@@ -104,9 +104,9 @@ egui/eframe).
 
 ### Mission
 
-Browse a catalog of recomp/decomp projects, manage a game library (launcher-managed,
-manual or external), launch games with mods and browse multiplayer servers — while
-never distributing game content.
+Browse a catalog of recomp/decomp projects, manage a library of installed games,
+launch games with mods and browse multiplayer servers — while never distributing game
+content.
 
 ### What the launcher never does
 
@@ -121,14 +121,12 @@ never distributing game content.
 
 **Super Smash Bros. Ultimate** and **Mario Kart 8 Deluxe** have, to our knowledge
 (October 2026), **no complete public recompilation/decompilation**. They are
-therefore absent from the default catalog. The generic **“External game”**
-mechanism lets you register an executable you already own; the launcher does not
-provide or configure any emulator, key or firmware. It is available from the
-Library page (“Add external game”).
+therefore absent from the default catalog. The launcher does not provide or install
+any emulator, key or firmware.
 
 ### Features
 
-- Full virtualised catalog, filters, search, sort, SQLite cache and offline mode.
+- Full catalog, filters (search, platform, status), SQLite cache and offline mode.
 - Secure installation from official releases (hashes, resume, guarded extraction,
   rollback), repair and uninstall preserving `userdata/` and `mods/`.
 - Game launching with detected mods (canonical folder, enable/reorder, `native_dir`
@@ -137,12 +135,13 @@ Library page (“Add external game”).
   cache, manifest-only fallback when the network fails).
 - Online options **only when the manifest declares them**: JSON public list, mDNS
   LAN discovery, manual `host:port`, TCP ping (2 s timeout, max 16 concurrent) and
-  joining through `join_template`.
-- Friends page with a **fully local** book (no account, no upload).
-- External games and per-slug adapters (`GameAdapter`/`AdapterRegistry`).
-- FR/EN UI (Fluent) for navigation, catalog, library, friends and settings; detailed
-  game pages still contain some French labels.
-- Light/dark theme, proxy, cache and log export.
+  joining through `join_template`, in the game detail “Online” tab.
+- Redesigned French interface: **Catalog / Library / Settings** navigation, tabbed
+  game detail, frameless window, Lucide icons and Inter typeface.
+- Dark theme by default and light theme, laid out for 1440×900 (minimum 1180×720;
+  catalog at two columns with a 310 px detail panel in narrow windows).
+- Guided install and uninstall with real progress, hash verification and user-file
+  checks; storage, proxy, cache and log-export settings.
 
 ### Release downloads
 

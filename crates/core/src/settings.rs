@@ -7,6 +7,7 @@ use crate::db::{Db, DbError};
 
 pub const KEY_LANGUAGE: &str = "ui.language";
 pub const KEY_THEME: &str = "ui.theme";
+pub const KEY_DIAGNOSTICS: &str = "ui.diagnostics";
 pub const KEY_INSTALL_DIR: &str = "install.dir";
 pub const KEY_PROXY: &str = "network.proxy";
 pub const KEY_CATALOG_MANIFEST_URL: &str = "catalog.manifest_url";
